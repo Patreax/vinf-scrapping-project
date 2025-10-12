@@ -10,13 +10,9 @@ import csv
 import glob
 from datetime import datetime
 from typing import Dict, List, Optional
-
-# TODO: mozno by som mohol dat prec net income 
-# TODO: in calculated percentage change I also need to have + or - sign
-# TODO: perhaps use lesser number of patterns to reduce false positives
-# TODO: maybe use "data-last-price" for getting the current price
-# TODO: data from the right table might be extracted as:
-#   name_of_field ... class="P6K39c"> -> and then there is the actual value (might need to format it)
+ 
+ # TODO: use "the last closing price ..." pattern for current price
+ # TODO: fix regex matching
 class RegexPatterns:
     """Centralized class containing all regex patterns for data extraction"""
     
@@ -109,21 +105,7 @@ class RegexPatterns:
         # r'EBITDA[^>]*>([^<]*\d+\.\d+B)',  # EBITDA patterns - looking for "29.11B" format
         # r'EBITDA.*?(\d+\.\d+B)',
     ]
-    
-    # Net income patterns
-    NET_INCOME = [
-        r'Net income.*?class="QXDnM">([^<]+)<',
-        # r'26\.42B',  # Direct 26.42B pattern
-        # r'(\d+\.42B)',  # Pattern ending in .42B
-        # r'Net income.*?26\.42B',  # Direct net income with 26.42B
-        # r'Net income.*?(\d+\.42B)',  # Net income ending in .42B
-        # r'Net income[^>]*>([^<]*26\.42B)',  # Net income with 26.42B
-        # r'Net income[^>]*>([^<]*\d+\.42B)',  # Net income ending in .42B
-        # r'(\d+\.42B)',  # Any value ending in .42B
-        # r'Net income.*?(\d+\.\d+B)',
-        # r'Net income[^>]*>([^<]*\d+\.\d+B)',
-    ]
-    
+
     # Previous close patterns
     PREVIOUS_CLOSE = [
         r'Previous close.*?class="P6K39c">([\$]?\d{1,3}(?:,\d{3})*(?:\.\d+)?)',
@@ -239,22 +221,6 @@ class StockDataExtractor:
                 return value
         return None
     
-    def extract_net_income(self, html_content: str) -> Optional[str]:
-        """Extract net income from HTML content"""
-        for pattern in self.patterns.NET_INCOME:
-            matches = re.findall(pattern, html_content, re.IGNORECASE)
-            if matches:
-                # Look for the correct Net Income value (26.42B) instead of Revenue (46.74B)
-                for value in matches:
-                    value = value.strip()
-                    if 'B' in value:
-                        # Prefer 26.42B or values ending in .42B
-                        if '26.42B' in value or '.42B' in value:
-                            return value
-                        elif value != '46.74B' and value != '29.11B':  # Exclude revenue and EBITDA
-                            return value
-        return None
-    
     def calculate_price_changes(self, current_price: Optional[str], previous_close: Optional[str]) -> Dict[str, str]:
         """Calculate percentage change and difference between current price and previous close"""
         changes = {}
@@ -331,10 +297,6 @@ class StockDataExtractor:
         if revenue:
             data["revenue"] = revenue
         
-        net_income = self.extract_net_income(html_content)
-        if net_income:
-            data["net_income"] = net_income
-        
         ebitda = self.extract_ebitda(html_content)
         if ebitda:
             data["ebitda"] = ebitda
@@ -401,7 +363,6 @@ def save_to_tsv(stock_data: Dict[str, any], filename: str = "data/extracted_data
             "founded",
             "employees",
             "revenue",
-            "net_income",
             "ebitda"
         ]
         
@@ -433,35 +394,35 @@ def save_to_tsv(stock_data: Dict[str, any], filename: str = "data/extracted_data
         return False
 
 
-def print_stock_data(stock_data: Dict[str, any]):
-    """
-    Print stock data to console in a formatted way
+# def print_stock_data(stock_data: Dict[str, any]):
+#     """
+#     Print stock data to console in a formatted way
     
-    Args:
-        stock_data: Dictionary containing stock data
-    """
-    print(f"\n📊 {stock_data['symbol']} Stock Data:")
-    print("-" * 40)
+#     Args:
+#         stock_data: Dictionary containing stock data
+#     """
+#     print(f"\n📊 {stock_data['symbol']} Stock Data:")
+#     print("-" * 40)
     
-    for key, value in stock_data.items():
-        if key == "calculated_percentage_change":
-            print(f"Calculated Percentage Change: {value}")
-        elif key == "calculated_difference":
-            print(f"Calculated Difference: {value}")
-        elif key == "revenue":
-            print(f"Revenue (2025): {value}")
-        elif key == "net_income":
-            print(f"Net Income (2025): {value}")
-        elif key == "ebitda":
-            print(f"EBITDA (2025): {value}")
-        elif key == "founded":
-            print(f"Founded: {value}")
-        elif key == "employees":
-            print(f"Number of Employees: {value}")
-        elif key == "source_file":
-            print(f"Source File: {value}")
-        else:
-            print(f"{key.replace('_', ' ').title()}: {value}")
+#     for key, value in stock_data.items():
+#         if key == "calculated_percentage_change":
+#             print(f"Calculated Percentage Change: {value}")
+#         elif key == "calculated_difference":
+#             print(f"Calculated Difference: {value}")
+#         elif key == "revenue":
+#             print(f"Revenue (2025): {value}")
+#         elif key == "net_income":
+#             print(f"Net Income (2025): {value}")
+#         elif key == "ebitda":
+#             print(f"EBITDA (2025): {value}")
+#         elif key == "founded":
+#             print(f"Founded: {value}")
+#         elif key == "employees":
+#             print(f"Number of Employees: {value}")
+#         elif key == "source_file":
+#             print(f"Source File: {value}")
+#         else:
+#             print(f"{key.replace('_', ' ').title()}: {value}")
 
 
 def process_html_file(html_file: str, output_file: str = "data/extracted_data.tsv") -> Dict[str, any]:
@@ -493,7 +454,7 @@ def process_html_file(html_file: str, output_file: str = "data/extracted_data.ts
         
         if stock_data:
             # Print to console
-            print_stock_data(stock_data)
+            # print_stock_data(stock_data)
             
             # Save to TSV
             if save_to_tsv(stock_data, output_file):

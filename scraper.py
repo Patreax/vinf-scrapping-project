@@ -11,37 +11,25 @@ import random
 import os
 import re
 import json
+import threading
+from extractor import process_html_file
 from datetime import datetime
 from typing import List, Dict, Optional
-import threading
-import time
-import random
-from extractor import process_html_file
 
 QUEUES_DIR = "queues"
 HTML_DIR = "html"
-RESULT_FILE = "results.tsv"
 DATA_DIR = "data"
+
 WEB_PAGE_METADATA_FILE = f"{DATA_DIR}/web-page-metadata.tsv"
 EXTRACTED_DATA_FILE = f"{DATA_DIR}/extracted_data.tsv"
+
 URL_STACK_FILE = f"{QUEUES_DIR}/web-url-stack.txt"
 PAGE_EXTRACTION_STACK_FILE = f"{QUEUES_DIR}/page-extraction-stack.txt"
 
+WEB_PAGE_METADATA_HEADER = "url\tfile_path\ttimestamp\tstatus\n"
+EXTRACTED_DATA_HEADER = "company\tsymbol\texchange\tsource_file\ttimestamp\tcurrent_price\tprevious_close\tcalculated_percentage_change\tcalculated_difference\tmarket_cap\tfounded\temployees\trevenue\tebitda\n"
+
 # https://www.google.com/finance/quote/NVDA:NASDAQ
-
-def create_html_directory():
-    """Create html directory if it doesn't exist"""
-    if not os.path.exists(HTML_DIR):
-        os.makedirs(HTML_DIR)
-        print(f"📁 Created directory: {HTML_DIR}")
-    return HTML_DIR
-
-def create_queues_directory():
-    """Create html directory if it doesn't exist"""
-    if not os.path.exists(QUEUES_DIR):
-        os.makedirs(QUEUES_DIR)
-        print(f"📁 Created directory: {QUEUES_DIR}")
-    return QUEUES_DIR
 
 def read_and_remove_last_url(stack_file: str = URL_STACK_FILE) -> Optional[str]:
     """
@@ -54,7 +42,7 @@ def read_and_remove_last_url(stack_file: str = URL_STACK_FILE) -> Optional[str]:
         The last URL from the file, or None if file is empty or doesn't exist
     """
     if not os.path.exists(stack_file):
-        print(f"❌ URL stack file not found: {stack_file}")
+        print(f"URL stack file not found: {stack_file}")
         return None
     
     try:
@@ -63,7 +51,7 @@ def read_and_remove_last_url(stack_file: str = URL_STACK_FILE) -> Optional[str]:
             urls = [line.strip() for line in f.readlines() if line.strip()]
         
         if not urls:
-            print(f"📭 URL stack file is empty: {stack_file}")
+            print(f"URL stack file is empty: {stack_file}")
             return None
         
         # Get the last URL
@@ -77,14 +65,14 @@ def read_and_remove_last_url(stack_file: str = URL_STACK_FILE) -> Optional[str]:
             for url in remaining_urls:
                 f.write(url + '\n')
         
-        print(f"📖 Read URL from stack: {last_url}")
-        print(f"📊 Remaining URLs in stack: {len(remaining_urls)}")
+        print(f"Processing URL: {last_url}")
         
         return last_url
         
     except Exception as e:
-        print(f"❌ Error reading URL stack file: {e}")
+        print(f"Error reading URL from stack: {e}")
         return None
+
 
 def add_urls_to_stack(urls: List[str], stack_file: str = URL_STACK_FILE) -> bool:
     """
@@ -102,12 +90,13 @@ def add_urls_to_stack(urls: List[str], stack_file: str = URL_STACK_FILE) -> bool
             for url in urls:
                 f.write(url + '\n')
         
-        print(f"📝 Added {len(urls)} URLs to stack")
+        print(f"Added {len(urls)} URLs to stack")
         return True
         
     except Exception as e:
-        print(f"❌ Error adding URLs to stack: {e}")
+        print(f"Error adding URLs to stack: {e}")
         return False
+
 
 def add_html_to_extraction_stack(html_filepath: str, extraction_stack_file: str = PAGE_EXTRACTION_STACK_FILE) -> bool:
     """
@@ -121,20 +110,17 @@ def add_html_to_extraction_stack(html_filepath: str, extraction_stack_file: str 
         True if successful, False otherwise
     """
     try:
-        # Ensure the queues directory exists
-        create_queues_directory()
-        
         with open(extraction_stack_file, 'a', encoding='utf-8') as f:
             f.write(html_filepath + '\n')
         
-        print(f"📄 Added HTML file to extraction stack: {html_filepath}")
+        print(f"Added HTML file to extraction stack: {html_filepath}")
         return True
         
     except Exception as e:
-        print(f"❌ Error adding HTML file to extraction stack: {e}")
+        print(f"Error adding HTML file to extraction stack: {e}")
         return False
 
-# TODO: randomize something in the headers
+
 def get_enhanced_headers():
     """Get enhanced headers to bypass consent page"""
     # List of common Chrome versions
@@ -146,6 +132,7 @@ def get_enhanced_headers():
     chrome_ver = random.choice(chrome_versions)
     windows_ver = random.choice(windows_versions)
     
+    # TODO: explain these headers
     return {
         "User-Agent": f"Mozilla/5.0 (Windows NT {windows_ver}; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_ver} Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -164,7 +151,7 @@ def get_enhanced_headers():
         "Sec-Ch-Ua-Platform": '"Windows"',
     }
 
-# TODO: here I need to make really sure that all the URLs are unique
+
 def extract_urls_from_page(html_content: str, base_url: str) -> List[str]:
     """
     Extract all URLs from the current page HTML content
@@ -183,10 +170,7 @@ def extract_urls_from_page(html_content: str, base_url: str) -> List[str]:
     extracted_urls = set([f"https://www.google.com/finance/{url}" for url in quote_urls])
     
     if not extracted_urls:
-        print("📭 No new URLs found on page")
         return []
-        
-    print(f"🔍 Found {len(extracted_urls)} potential URLs")
     
     # Filter out URLs that were already processed or are in stack
     try:
@@ -214,12 +198,12 @@ def extract_urls_from_page(html_content: str, base_url: str) -> List[str]:
         new_urls = [url for url in extracted_urls 
                    if url not in processed_urls and url not in stack_urls]
         
-        print(f"✨ Found {len(new_urls)} new URLs (filtered out {len(extracted_urls) - len(new_urls)} duplicates)")
+        print(f"Found {len(new_urls)} new URLs.")
         
         return new_urls
         
     except Exception as e:
-        print(f"⚠️ Error filtering URLs: {e}")
+        print(f"Error filtering URLs: {e}")
         return []
 
 
@@ -245,8 +229,6 @@ def download_stock_page(url: str) -> Dict[str, any]:
         else:
             symbol = last_part
     
-    print(f"🚀 Scraping {symbol} stock page from Google Finance...")
-    
     headers = get_enhanced_headers()
     
     try:
@@ -262,19 +244,14 @@ def download_stock_page(url: str) -> Dict[str, any]:
         }
         session.cookies.update(cookies)
         
-        print(f"📡 Making request to: {url}")
-        
-        
         response = session.get(url, timeout=15)
         response.raise_for_status()
         
-        print(f"✅ Successfully downloaded HTML ({len(response.text):,} characters)")
+        print(f"Successfully downloaded HTML from url: {url}")
         
-        # TODO: handle success and error cases
         return {
             "success": True,
             "symbol": symbol,
-            "exchange": exchange,
             "url": url,
             "html_content": response.text,
             "content_length": len(response.text),
@@ -286,12 +263,11 @@ def download_stock_page(url: str) -> Dict[str, any]:
         return {
             "success": False,
             "symbol": symbol,
-            "exchange": exchange,
             "url": url,
             "error": str(e),
             "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
-    
+
 
 def save_html_to_file(html_content: str, symbol: str, html_dir: str) -> str:
     """
@@ -313,12 +289,13 @@ def save_html_to_file(html_content: str, symbol: str, html_dir: str) -> str:
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(html_content)
         
-        print(f"💾 HTML saved to: {filepath}")
+        print(f"HTML saved to: {filepath}")
         return filepath
         
     except Exception as e:
-        print(f"❌ Error saving HTML file: {e}")
+        print(f"Error saving HTML file: {e}")
         return None
+
 
 def write_page_metadata(page_metadata: Dict[str, any], filename: str):
     """
@@ -328,10 +305,6 @@ def write_page_metadata(page_metadata: Dict[str, any], filename: str):
         page_metadata: Dictionary containing page metadata
         filename: Name of TSV file to write to
     """
-    # Create file with headers if it doesn't exist
-    if not os.path.exists(filename):
-        with open(filename, 'w', encoding='utf-8') as f:
-            f.write("url\thtml_file\ttimestamp\tstatus\n")
     
     # Append metadata
     with open(filename, 'a', encoding='utf-8') as f:
@@ -342,28 +315,6 @@ def write_page_metadata(page_metadata: Dict[str, any], filename: str):
         
         f.write(f"{url}\t{html_file}\t{timestamp}\t{status}\n")
 
-def print_summary(results: List[Dict[str, any]]):
-    """Print a summary of scraping results"""
-    print(f"\n{'='*60}")
-    print("📊 SCRAPING SUMMARY")
-    print(f"{'='*60}")
-    
-    successful = [r for r in results if r["success"]]
-    failed = [r for r in results if not r["success"]]
-    
-    print(f"✅ Successful: {len(successful)}")
-    print(f"❌ Failed: {len(failed)}")
-    print(f"📁 Total processed: {len(results)}")
-    
-    if successful:
-        print(f"\n✅ Successfully scraped stocks:")
-        for result in successful:
-            print(f"   • {result['symbol']} - {result['content_length']:,} chars - {result['saved_file']}")
-    
-    if failed:
-        print(f"\n❌ Failed stocks:")
-        for result in failed:
-            print(f"   • {result['symbol']} - {result.get('error', 'Unknown error')}")
 
 def process_single_url_from_stack() -> bool:
     """
@@ -376,15 +327,11 @@ def process_single_url_from_stack() -> bool:
     url = read_and_remove_last_url()
     
     if url is None:
-        print("📭 No URLs remaining in stack")
+        print("No URLs remaining in stack")
         return False
     
     print(f"\n{'='*60}")
-    print(f"🎯 Processing URL: {url}")
-    print(f"{'='*60}")
-    
-    # Create necessary directories
-    html_dir = create_html_directory()
+    print(f"Processing URL: {url}")
     
     # Download the page
     result = download_stock_page(url)
@@ -394,14 +341,13 @@ def process_single_url_from_stack() -> bool:
         filepath = save_html_to_file(
             result["html_content"], 
             result["symbol"], 
-            html_dir
+            HTML_DIR
         )
         
         if filepath:
             # Add HTML file to extraction stack for processing by extractor
             add_html_to_extraction_stack(filepath)
             result["saved_file"] = filepath
-            print(f"✅ Successfully scraped and saved {result['symbol']}")
             
             # Extract URLs from the page and add them to stack
             extracted_urls = extract_urls_from_page(result["html_content"], url)
@@ -414,55 +360,56 @@ def process_single_url_from_stack() -> bool:
         else:
             result["success"] = False
             result["error"] = "Failed to save HTML file"
-            print(f"❌ Failed to save HTML file for {result['symbol']}")
+            print(f"Failed to save HTML file for {result['symbol']}")
     else:
-        print(f"❌ Failed to scrape {result.get('symbol', 'UNKNOWN')}: {result.get('error', 'Unknown error')}")
-        # Still write metadata for failed attempts
+        print(f"Failed to scrape url: {url}")
         write_page_metadata(result, WEB_PAGE_METADATA_FILE)
     
     return True
+
+def create_file_structure():
+    # Create data directory if it doesn't exist
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR)
+    
+    # Create metadata file if it doesn't exist
+    if not os.path.exists(WEB_PAGE_METADATA_FILE):
+        with open(WEB_PAGE_METADATA_FILE, 'w', encoding='utf-8') as f:
+            f.write(WEB_PAGE_METADATA_HEADER)
+            
+    # Create extracted data file if it doesn't exist
+    if not os.path.exists(EXTRACTED_DATA_FILE):
+        with open(EXTRACTED_DATA_FILE, 'w', encoding='utf-8') as f:
+            f.write(EXTRACTED_DATA_HEADER)
+            
+    # Create html directory if it doesn't exist
+    if not os.path.exists(HTML_DIR):
+        os.makedirs(HTML_DIR)
+
+    # Create queues directory if it doesn't exist
+    if not os.path.exists(QUEUES_DIR):
+        os.makedirs(QUEUES_DIR)
+    
 
 def downloader_worker():
     """
     Downloads HTML pages from the URL stack and saves them.
     """
-    print("=" * 60)
-    print("🚀 Downloader Worker Started")
-    print("=" * 60)
-
-    # Create data directory if it doesn't exist
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
-        print(f"📁 Created directory: {DATA_DIR}")
-
-    # Create metadata file if it doesn't exist
-    if not os.path.exists(WEB_PAGE_METADATA_FILE):
-        with open(WEB_PAGE_METADATA_FILE, 'w', encoding='utf-8') as f:
-            f.write("url\tsymbol\ttimestamp\tsuccess\terror\tsaved_file\n")
-        print(f"📄 Created metadata file: {WEB_PAGE_METADATA_FILE}")
     
-    # Create extracted data file if it doesn't exist
-    if not os.path.exists(EXTRACTED_DATA_FILE):
-        with open(EXTRACTED_DATA_FILE, 'w', encoding='utf-8') as f:
-            # TODO: make this into a constant
-            f.write("company\tsymbol\texchange\tsource_file\ttimestamp\tcurrent_price\tprevious_close\tcalculated_percentage_change\tcalculated_difference\tmarket_cap\tfounded\temployees\trevenue\tnet_income\tebitda\n")
-        print(f"📄 Created extracted data file: {EXTRACTED_DATA_FILE}")
+    print("Downloader Worker Started")
 
-
-    processed_count = 0
+    create_file_structure()
 
     while True:
         if not process_single_url_from_stack():
-            print("✅ No more URLs to process. Downloader exiting.")
+            print("No more URLs to process. Stopping downloader.")
             break
 
-        processed_count += 1
-
         delay = random.uniform(1, 3)
-        print(f"⏳ Waiting {delay:.1f} seconds before next download...")
+        print(f"Waiting {delay:.1f} seconds before next download...")
         time.sleep(delay)
 
-    print(f"📊 Downloader processed total {processed_count} pages.")
+    print(f"\n Downloading completed!")
 
 
 def extractor_worker():
@@ -470,10 +417,9 @@ def extractor_worker():
     Processes HTML files from the extraction stack.
     Waits 1s and retries if the stack is empty.
     """
-    print("=" * 60)
-    print("🧠 Extractor Worker Started")
-    print("=" * 60)
-
+    
+    print("Extractor worker started")
+    
     while True:
         try:
             with open(PAGE_EXTRACTION_STACK_FILE, "r+") as f:
@@ -489,51 +435,22 @@ def extractor_worker():
                 f.truncate()
                 f.writelines(line + "\n" for line in lines)
 
-            print(f"🔍 Extracting data from: {html_file}")
             process_html_file(html_file)
-            print(f"✅ Extraction done for: {html_file}")
+            print(f"Extracted data from: {html_file}")
 
         except FileNotFoundError:
-            print("⚠️ Extraction stack file not found, waiting...")
+            print("Extraction stack file not found, waiting...")
             time.sleep(1)
         except Exception as e:
-            print(f"❌ Error in extractor: {e}")
+            print(f"Error in extractor: {e}")
             time.sleep(1)
 
 
-def main():
-    # """
-    # Main function to scrape stock data from Google Finance
-    # Processes URLs from web-url-stack.txt file one by one
-    # """
-    # print("=" * 60)
-    # print("🎯 Google Finance HTML Scraper")
-    # print("📚 Reading URLs from web-url-stack.txt")
-    # print("=" * 60)
-    
-    # processed_count = 0
-    
-    # # Process URLs from stack until empty
-    # while True:
-    #     if not process_single_url_from_stack():
-    #         break
-        
-    #     processed_count += 1
-        
-    #     # Add delay between requests to be respectful
-    #     delay = random.uniform(1, 3)
-    #     print(f"⏳ Waiting {delay:.1f} seconds before next request...")
-    #     time.sleep(delay)
-    
-    # print(f"\n🎉 Scraping completed!")
-    # print(f"📊 Total URLs processed: {processed_count}")
-    # print(f"📁 HTML files saved in: {HTML_DIR}/ directory")
-    # print(f"📋 Metadata saved in: {WEB_PAGE_METADATA_FILE}")
-    
+def main():  
     """
     Main entry point — starts two workers in parallel:
-    1️⃣ Downloader: fetches HTML pages.
-    2️⃣ Extractor: processes saved HTML files.
+      Downloader: fetches HTML pages.
+      Extractor: processes saved HTML files.
     """
     downloader = threading.Thread(target=downloader_worker, daemon=True)
     extractor = threading.Thread(target=extractor_worker, daemon=True)
@@ -541,20 +458,9 @@ def main():
     downloader.start()
     extractor.start()
 
-    # Wait for downloader to finish
     downloader.join()
-
-    # Extractor might still be processing some files, give it time
-    print("🕐 Waiting for extractor to finish remaining files...")
-    while True:
-        try:
-            with open(PAGE_EXTRACTION_STACK_FILE) as f:
-                lines = [line.strip() for line in f.readlines() if line.strip()]
-                if not lines:
-                    break
-        except FileNotFoundError:
-            break
-        time.sleep(1)
+    time.sleep(3)
+    extractor.join(timeout=2)
 
     print("🎉 All work completed!")
 
