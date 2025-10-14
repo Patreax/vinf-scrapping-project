@@ -12,7 +12,7 @@ import os
 import re
 import json
 import threading
-from extractor import process_html_file
+from extractor import process_html_file, StockDataExtractor
 from datetime import datetime
 from typing import List, Dict, Optional
 
@@ -64,9 +64,7 @@ def read_and_remove_last_url(stack_file: str = URL_STACK_FILE) -> Optional[str]:
         with open(stack_file, 'w', encoding='utf-8') as f:
             for url in remaining_urls:
                 f.write(url + '\n')
-        
-        print(f"Processing URL: {last_url}")
-        
+                
         return last_url
         
     except Exception as e:
@@ -90,7 +88,6 @@ def add_urls_to_stack(urls: List[str], stack_file: str = URL_STACK_FILE) -> bool
             for url in urls:
                 f.write(url + '\n')
         
-        print(f"Added {len(urls)} URLs to stack")
         return True
         
     except Exception as e:
@@ -113,7 +110,6 @@ def add_html_to_extraction_stack(html_filepath: str, extraction_stack_file: str 
         with open(extraction_stack_file, 'a', encoding='utf-8') as f:
             f.write(html_filepath + '\n')
         
-        print(f"Added HTML file to extraction stack: {html_filepath}")
         return True
         
     except Exception as e:
@@ -132,7 +128,6 @@ def get_enhanced_headers():
     chrome_ver = random.choice(chrome_versions)
     windows_ver = random.choice(windows_versions)
     
-    # TODO: explain these headers
     return {
         "User-Agent": f"Mozilla/5.0 (Windows NT {windows_ver}; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_ver} Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -194,7 +189,6 @@ def extract_urls_from_page(html_content: str, base_url: str) -> List[str]:
             with open(URL_STACK_FILE, 'r', encoding='utf-8') as f:
                 stack_urls = set(line.strip() for line in f)
         
-        # Only keep URLs we haven't processed and aren't in stack
         new_urls = [url for url in extracted_urls 
                    if url not in processed_urls and url not in stack_urls]
         
@@ -217,7 +211,6 @@ def download_stock_page(url: str) -> Dict[str, any]:
     Returns:
         Dictionary with scraping results
     """
-    # Extract symbol and exchange from URL
     symbol = ""
     exchange = ""
     
@@ -232,11 +225,9 @@ def download_stock_page(url: str) -> Dict[str, any]:
     headers = get_enhanced_headers()
     
     try:
-        # Use session to maintain cookies and avoid consent page
         session = requests.Session()
         session.headers.update(headers)
         
-        # Set cookies to bypass consent
         cookies = {
             'CONSENT': 'YES+cb.20210328-17-p0.en+FX+667',
             'SOCS': 'CAI',
@@ -259,7 +250,7 @@ def download_stock_page(url: str) -> Dict[str, any]:
         }
         
     except Exception as e:
-        print(f"❌ Error scraping {symbol}: {e}")
+        print(f"Error scraping {symbol}: {e}")
         return {
             "success": False,
             "symbol": symbol,
@@ -309,7 +300,7 @@ def write_page_metadata(page_metadata: Dict[str, any], filename: str):
     # Append metadata
     with open(filename, 'a', encoding='utf-8') as f:
         url = page_metadata['url']
-        html_file = page_metadata.get('saved_file', '')  # Empty if save failed
+        html_file = page_metadata.get('saved_file', '')
         timestamp = page_metadata['timestamp']
         status = 'success' if page_metadata['success'] else 'failure'
         
@@ -323,7 +314,6 @@ def process_single_url_from_stack() -> bool:
     Returns:
         True if a URL was processed, False if stack is empty
     """
-    # Read the last URL from the stack
     url = read_and_remove_last_url()
     
     if url is None:
@@ -333,11 +323,9 @@ def process_single_url_from_stack() -> bool:
     print(f"\n{'='*60}")
     print(f"Processing URL: {url}")
     
-    # Download the page
     result = download_stock_page(url)
     
     if result["success"]:
-        # Save HTML to file
         filepath = save_html_to_file(
             result["html_content"], 
             result["symbol"], 
@@ -345,16 +333,13 @@ def process_single_url_from_stack() -> bool:
         )
         
         if filepath:
-            # Add HTML file to extraction stack for processing by extractor
             add_html_to_extraction_stack(filepath)
             result["saved_file"] = filepath
             
-            # Extract URLs from the page and add them to stack
             extracted_urls = extract_urls_from_page(result["html_content"], url)
             if extracted_urls:
                 add_urls_to_stack(extracted_urls)
             
-            # Write metadata
             write_page_metadata(result, WEB_PAGE_METADATA_FILE)
             
         else:
@@ -420,22 +405,22 @@ def extractor_worker():
     
     print("Extractor worker started")
     
+    extractor = StockDataExtractor()
+    
     while True:
         try:
             with open(PAGE_EXTRACTION_STACK_FILE, "r+") as f:
                 lines = [line.strip() for line in f.readlines() if line.strip()]
                 if not lines:
-                    # Stack empty → wait and try again
                     time.sleep(1)
                     continue
 
-                # Pop first entry
                 html_file = lines.pop(0)
                 f.seek(0)
                 f.truncate()
                 f.writelines(line + "\n" for line in lines)
 
-            process_html_file(html_file)
+            process_html_file(html_file, output_file=EXTRACTED_DATA_FILE, extractor=extractor)
             print(f"Extracted data from: {html_file}")
 
         except FileNotFoundError:
@@ -462,7 +447,7 @@ def main():
     time.sleep(3)
     extractor.join(timeout=2)
 
-    print("🎉 All work completed!")
+    print("All work completed!")
 
 if __name__ == "__main__":
     main()
