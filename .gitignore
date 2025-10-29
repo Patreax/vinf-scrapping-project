@@ -3,6 +3,7 @@ __pycache__/
 data/
 queues/
 html/
+backup/
 html-backup/
 poc/
 venv/
