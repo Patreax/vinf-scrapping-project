@@ -1,10 +1,3 @@
-#!/usr/bin/env python3
-"""
-Google Finance HTML Scraper
-Downloads HTML content from Google Finance stock pages and saves them to files
-Reads URLs from web-url-stack.txt file and processes them one by one
-"""
-
 import requests
 import time
 import random
@@ -19,6 +12,10 @@ from typing import List, Dict, Optional
 QUEUES_DIR = "queues"
 HTML_DIR = "html"
 DATA_DIR = "data"
+
+# If enabled, the scraper will download URLs from the page and add them to the stack
+# If disabled, the scraper will download only the URLs in the stack, and will not add any new URLs to the stacks
+ADD_EXTRACTED_URLS_TO_STACK = False
 
 WEB_PAGE_METADATA_FILE = f"{DATA_DIR}/web-page-metadata.tsv"
 EXTRACTED_DATA_FILE = f"{DATA_DIR}/extracted_data.tsv"
@@ -124,7 +121,7 @@ def get_enhanced_headers():
     # List of common Windows versions
     windows_versions = ["10.0", "11.0"]
     
-    # Randomly select versions
+    # Randomly select the following versions
     chrome_ver = random.choice(chrome_versions)
     windows_ver = random.choice(windows_versions)
     
@@ -144,6 +141,7 @@ def get_enhanced_headers():
         "Sec-Ch-Ua": f'"Not_A Brand";v="8", "Chromium";v="{chrome_ver.split(".")[0]}", "Google Chrome";v="{chrome_ver.split(".")[0]}"',
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": '"Windows"',
+        "From": "xtomco@stuba.sk",  # Serves for identification of the scraper
     }
 
 
@@ -158,6 +156,7 @@ def extract_urls_from_page(html_content: str, base_url: str) -> List[str]:
     Returns:
         List of extracted URLs
     """
+    
     # Extract URLs matching Google Finance stock quotes
     quote_urls = re.findall(r'href="\./(quote/[^"]+)"', html_content)
     
@@ -336,9 +335,11 @@ def process_single_url_from_stack() -> bool:
             add_html_to_extraction_stack(filepath)
             result["saved_file"] = filepath
             
-            extracted_urls = extract_urls_from_page(result["html_content"], url)
-            if extracted_urls:
-                add_urls_to_stack(extracted_urls)
+            # Add extracted URLs to the stack if enabled
+            if ADD_EXTRACTED_URLS_TO_STACK:
+                extracted_urls = extract_urls_from_page(result["html_content"], url)
+                if extracted_urls:
+                    add_urls_to_stack(extracted_urls)
             
             write_page_metadata(result, WEB_PAGE_METADATA_FILE)
             
@@ -435,7 +436,7 @@ def main():
     """
     Main entry point — starts two workers in parallel:
       Downloader: fetches HTML pages.
-      Extractor: processes saved HTML files.
+      Extractor: extracts data from HTML files.
     """
     downloader = threading.Thread(target=downloader_worker, daemon=True)
     extractor = threading.Thread(target=extractor_worker, daemon=True)

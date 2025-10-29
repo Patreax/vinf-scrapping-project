@@ -1,8 +1,3 @@
-"""
-Google Finance HTML Extractor
-Processes HTML files from the html directory and extracts stock data
-"""
-
 import os
 import re
 import csv
@@ -97,7 +92,7 @@ class StockDataExtractor:
             matches = re.search(pattern, html_content, re.DOTALL)
             if matches:
                 price = matches.group(1).replace(',', '').replace('$', '')
-                return f"${price}" # TODO: include other currencies
+                return f"${price}"
         return None
     
     def extract_previous_close(self, html_content: str) -> Optional[str]:
@@ -106,7 +101,7 @@ class StockDataExtractor:
             matches = re.search(pattern, html_content, re.DOTALL)
             if matches:
                 previous_close = matches.group(1).replace(',', '').replace('$', '')
-                return f"${previous_close}" # TODO: include other currencies
+                return f"${previous_close}"
         return None
     
     def extract_market_cap(self, html_content: str) -> Optional[str]:
