@@ -7,17 +7,21 @@ from datetime import datetime
 from typing import Dict, List, Set, Tuple, Any
 from pathlib import Path
 
+# TODO: vahy podla casu
 
 class StockIndexer:
     """TF-IDF indexer for stock market time-series data."""
     
-    def __init__(self, data_file: str = "data/extracted_data.tsv"):
+    def __init__(self, data_file: str = "data/extracted_data.tsv", half_life_days: float = 7.0):
         self.data_file = data_file
         self.documents: List[Dict[str, Any]] = []  # All stock records
         self.index: Dict[str, Dict[int, float]] = defaultdict(dict)  # term -> {doc_id: tf-idf}
         self.doc_frequencies: Dict[str, int] = Counter()  # term -> number of docs containing it
         self.doc_norms: Dict[int, float] = {}  # doc_id -> L2 norm for cosine similarity
         self.latest_snapshots: Dict[str, int] = {}  # symbol -> latest doc_id
+        # Recency weighting
+        self.half_life_days: float = half_life_days
+        self.recency_weights: Dict[int, float] = {}  # doc_id -> weight in [0,1]
     
     def bucket_price(self, price: str) -> str:
         """
@@ -312,23 +316,41 @@ class StockIndexer:
         
         print(f"Loaded {len(self.documents)} records")
         print(f"Found {len(self.latest_snapshots)} unique stocks")
+        # Compute recency weights now that all documents are loaded
+        self._compute_recency_weights()
     
-    def build_index(self, use_latest_only: bool = False):
+    def _compute_recency_weights(self):
+        """Compute exponential decay weights for each document based on timestamp.
+        
+        Weight function uses half-life: weight = 0.5 ** (age_days / half_life_days)
+        Documents without a valid timestamp receive weight 1.0.
+        """
+        now = datetime.now()
+        ln2 = math.log(2)
+        for doc_id, doc in enumerate(self.documents):
+            ts_str = doc.get('timestamp', '')
+            try:
+                ts = datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
+                age_days = max((now - ts).total_seconds() / 86400.0, 0.0)
+                if self.half_life_days > 0:
+                    weight = math.exp(-ln2 * (age_days / self.half_life_days))
+                else:
+                    weight = 1.0
+            except Exception:
+                weight = 1.0
+            self.recency_weights[doc_id] = float(max(min(weight, 1.0), 0.0))
+    
+    def build_index(self):
         """
         Build TF-IDF index from loaded documents.
         
-        Args:
-            use_latest_only: If True, only index the latest snapshot of each stock
+        Always indexes all records; recency is handled via exponential decay in scoring.
         """
-        print(f"\nBuilding TF-IDF index (latest_only={use_latest_only})...")
+        print(f"\nBuilding TF-IDF index (indexing all records)...")
         
-        # Determine which documents to index
-        if use_latest_only:
-            doc_ids = set(self.latest_snapshots.values())
-            print(f"Indexing {len(doc_ids)} latest snapshots")
-        else:
-            doc_ids = set(range(len(self.documents)))
-            print(f"Indexing all {len(doc_ids)} records")
+        # Determine which documents to index (all)
+        doc_ids = set(range(len(self.documents)))
+        print(f"Indexing all {len(doc_ids)} records")
         
         # Step 1: Compute term frequencies (TF) and document frequencies (DF)
         term_freqs: Dict[int, Counter] = defaultdict(Counter)
@@ -450,6 +472,9 @@ class StockIndexer:
         for doc_id in scores:
             if self.doc_norms[doc_id] > 0:
                 scores[doc_id] /= (query_norm * self.doc_norms[doc_id])
+            # Apply recency weight
+            weight = self.recency_weights.get(doc_id, 1.0)
+            scores[doc_id] *= weight
         
         # Sort by score and return top_k
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
@@ -524,7 +549,10 @@ class StockIndexer:
             scores = {doc_id: score for doc_id, score in scores.items() 
                      if doc_term_counts[doc_id] == num_query_terms}
         
-        # Sort by score and return top_k
+        # Apply recency weights and sort
+        for doc_id in list(scores.keys()):
+            weight = self.recency_weights.get(doc_id, 1.0)
+            scores[doc_id] *= weight
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
         
         return [(doc_id, score, self.documents[doc_id]) for doc_id, score in ranked]
@@ -566,7 +594,9 @@ class StockIndexer:
             'doc_frequencies': dict(self.doc_frequencies),
             'doc_norms': self.doc_norms,
             'latest_snapshots': self.latest_snapshots,
-            'data_file': self.data_file
+            'data_file': self.data_file,
+            'half_life_days': self.half_life_days,
+            'recency_weights': self.recency_weights
         }
         
         Path(filepath).parent.mkdir(parents=True, exist_ok=True)
@@ -588,11 +618,17 @@ class StockIndexer:
         self.doc_norms = index_data['doc_norms']
         self.latest_snapshots = index_data['latest_snapshots']
         self.data_file = index_data['data_file']
+        self.half_life_days = index_data.get('half_life_days', self.half_life_days)
+        self.recency_weights = index_data.get('recency_weights', {})
+        if not self.recency_weights:
+            # Backfill if loading an old index
+            self._compute_recency_weights()
         
         print(f"Index loaded successfully!")
         print(f"  - {len(self.documents)} documents")
         print(f"  - {len(self.doc_frequencies)} unique terms")
         print(f"  - {len(self.latest_snapshots)} unique stocks")
+        print(f"  - half_life_days = {self.half_life_days}")
     
     # ==================== STATISTICS ====================
     

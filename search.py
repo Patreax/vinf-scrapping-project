@@ -3,10 +3,7 @@ Search interface for the Stock Market TF-IDF Index.
 This script provides a simple way to search the indexed stock data.
 
 Usage:
-    python search.py                              # Full dataset, latest snapshots only
-    python search.py --example                   # Example dataset, latest snapshots only
-    python search.py --all-history               # Full dataset, all historical snapshots
-    python search.py --example --all-history     # Example dataset, all historical snapshots
+    python search.py  # Uses full dataset, all records (recency-weighted)
 """
 
 import sys
@@ -15,24 +12,16 @@ from indexer import StockIndexer
 
 def main():
     # Parse command-line arguments
-    use_example = False
-    use_latest_only = True  # Default to True
+    # No example mode; always use full dataset
     
     for i, arg in enumerate(sys.argv[1:], 1):
-        if arg == "--example":
-            use_example = True
-        elif arg == "--all-history":
-            use_latest_only = False
+        pass
     
-    # Check if user wants to use example data or full data
-    if use_example:
-        data_file = "data/example_extracted_data.tsv"
-        print("Using example data file: data/example_extracted_data.tsv")
-    else:
-        data_file = "data/extracted_data.tsv"
-        print("Using full data file: data/extracted_data.tsv")
+    # Always use full data
+    data_file = "data/extracted_data.tsv"
+    print("Using full data file: data/extracted_data.tsv")
     
-    print(f"\nInitializing indexer (use_latest_only={use_latest_only})...")
+    print(f"\nInitializing indexer (recency-weighted, indexing all records)...")
     indexer = StockIndexer(data_file=data_file)
     
     # Try to load existing index first
@@ -43,7 +32,7 @@ def main():
     except FileNotFoundError:
         print("\n✗ No existing index found, building new one...")
         indexer.load_data()
-        indexer.build_index(use_latest_only=use_latest_only)
+        indexer.build_index()
         indexer.save_index(index_filename)
         print(f"✓ Index saved to {index_filename}")
     
