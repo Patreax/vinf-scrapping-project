@@ -1,34 +1,92 @@
 """
-Search interface for the Stock Market TF-IDF Index.
+Search interface for the Stock Market Indexes.
 This script provides a simple way to search the indexed stock data.
 
 Usage:
-    python search.py  # Uses full dataset, all records (recency-weighted)
+    python search.py                    # Interactive mode - choose index type
+    python search.py --tfidf            # Use TF-IDF index
+    python search.py --lucene           # Use Lucene index
+    python search.py --tfidf --data <file>  # Use TF-IDF with custom data file
+    python search.py --lucene --index <dir> # Use Lucene with custom index directory
 """
 
 import sys
+import os
 from indexer import StockIndexer
 
+# Try to import Lucene searcher
+try:
+    import lucene
+    from index_joined_data_lucene import JoinedDataLuceneSearcher
+    LUCENE_AVAILABLE = True
+except ImportError:
+    LUCENE_AVAILABLE = False
+    print("Warning: PyLucene not available. Lucene search will be disabled.")
 
-def main():
-    # Parse command-line arguments
-    # No example mode; always use full dataset
+
+def parse_arguments():
+    """Parse command-line arguments."""
+    use_tfidf = False
+    use_lucene = False
+    data_file = None
+    index_dir = None
     
-    for i, arg in enumerate(sys.argv[1:], 1):
-        pass
+    i = 0
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+        if arg == '--tfidf':
+            use_tfidf = True
+        elif arg == '--lucene':
+            use_lucene = True
+        elif arg == '--data' and i + 1 < len(sys.argv):
+            data_file = sys.argv[i + 1]
+            i += 1
+        elif arg == '--index' and i + 1 < len(sys.argv):
+            index_dir = sys.argv[i + 1]
+            i += 1
+        i += 1
     
-    # Always use full data
-    data_file = "data/extracted_data.tsv"
-    print("Using full data file: data/extracted_data.tsv")
+    return use_tfidf, use_lucene, data_file, index_dir
+
+
+def choose_index_type():
+    """Interactive prompt to choose index type."""
+    print("\n" + "=" * 100)
+    print("SELECT INDEX TYPE")
+    print("=" * 100)
+    print("1. TF-IDF Index (from indexer.py)")
+    if LUCENE_AVAILABLE:
+        print("2. Lucene Index (from index_joined_data_lucene.py)")
+    else:
+        print("2. Lucene Index (not available - PyLucene not installed)")
+    print("=" * 100)
     
-    print(f"\nInitializing indexer (recency-weighted, indexing all records)...")
+    while True:
+        choice = input("\nEnter choice (1 or 2): ").strip()
+        if choice == '1':
+            return 'tfidf'
+        elif choice == '2' and LUCENE_AVAILABLE:
+            return 'lucene'
+        else:
+            print("Invalid choice. Please enter 1 or 2.")
+
+
+def setup_tfidf_indexer(data_file=None):
+    """Setup and load TF-IDF indexer."""
+    if data_file is None:
+        data_file = "data/extracted_data.tsv"
+    
+    print(f"Using TF-IDF index")
+    print(f"Data file: {data_file}")
+    
+    print(f"\nInitializing TF-IDF indexer (recency-weighted, indexing all records)...")
     indexer = StockIndexer(data_file=data_file)
     
     # Try to load existing index first
     index_filename = f"indexes/{data_file.split('/')[-1].replace('.tsv', '_index.pkl')}"
     try:
         indexer.load_index(index_filename)
-        print("\n✓ Loaded existing index")
+        print("\n✓ Loaded existing TF-IDF index")
     except FileNotFoundError:
         print("\n✗ No existing index found, building new one...")
         indexer.load_data()
@@ -39,74 +97,163 @@ def main():
     # Print statistics
     indexer.print_statistics()
     
+    return indexer
+
+
+def setup_lucene_searcher(index_dir=None):
+    """Setup and load Lucene searcher."""
+    if not LUCENE_AVAILABLE:
+        print("Error: PyLucene is not available. Cannot use Lucene index.")
+        return None
+    
+    # Initialize JVM for PyLucene
+    try:
+        lucene.initVM(vmargs=['-Djava.awt.headless=true'])
+        print("✓ JVM initialized for PyLucene")
+    except Exception as e:
+        print(f"Warning: JVM may already be initialized: {e}")
+    
+    if index_dir is None:
+        index_dir = "lucene/joined_company_data_index"
+    
+    print(f"Using Lucene index")
+    print(f"Index directory: {index_dir}")
+    
+    # Create searcher with default field weights (all 1.0)
+    # To customize weights, modify this section or use searcher.set_field_weights() after creation
+    # Example:
+    #   custom_weights = {'company': 2.0, 'title': 1.5, 'description': 1.2}
+    #   searcher = JoinedDataLuceneSearcher(index_dir=index_dir, field_weights=custom_weights)
+    searcher = JoinedDataLuceneSearcher(index_dir=index_dir)
+    
+    if not searcher.open_index():
+        print(f"\n✗ Error: Could not open Lucene index at {index_dir}")
+        print("Please make sure the index exists. Run index_joined_data_lucene.py to create it.")
+        return None
+    
+    print("\n✓ Opened Lucene index")
+    searcher.print_statistics()
+    
+    return searcher
+
+
+def main():
+    # Parse command-line arguments
+    use_tfidf, use_lucene, data_file, index_dir = parse_arguments()
+    
+    # Determine which index to use
+    index_type = None
+    if use_tfidf:
+        index_type = 'tfidf'
+    elif use_lucene:
+        index_type = 'lucene'
+    else:
+        # Interactive mode - let user choose
+        index_type = choose_index_type()
+    
+    # Setup the appropriate indexer/searcher
+    indexer = None
+    searcher = None
+    
+    if index_type == 'tfidf':
+        indexer = setup_tfidf_indexer(data_file)
+        if indexer is None:
+            return
+    elif index_type == 'lucene':
+        searcher = setup_lucene_searcher(index_dir)
+        if searcher is None:
+            return
+    
     # Interactive search mode
     print("\n" + "=" * 100)
     print("INTERACTIVE SEARCH MODE")
     print("=" * 100)
     print("\nEnter search queries (or 'quit' to exit, 'help' for examples)")
+    if index_type == 'lucene':
+        print("Type 'weights' to see current field boost weights")
     
-    while True:
-        try:
-            query = input("\nSearch> ").strip()
-            
-            if query.lower() in ['quit', 'exit', 'q']:
+    try:
+        while True:
+            try:
+                query = input("\nSearch> ").strip()
+                
+                if query.lower() in ['quit', 'exit', 'q']:
+                    break
+                
+                if query.lower() == 'help':
+                    print_help(index_type)
+                    continue
+                
+                if query.lower() == 'weights' and index_type == 'lucene':
+                    searcher.print_field_weights()
+                    continue
+                
+                if not query:
+                    continue
+                
+                # Parse search mode (AND/OR)
+                require_all_terms = True  # Default to AND
+                
+                if query.upper().startswith('OR:'):
+                    require_all_terms = False
+                    query = query[3:].strip()
+                elif query.upper().startswith('AND:'):
+                    require_all_terms = True
+                    query = query[4:].strip()
+                
+                # Parse top_k if specified (e.g., "Nike:5" for top 5 results)
+                top_k = 10
+                if ':' in query and not query.upper().startswith(('OR:', 'AND:')):
+                    parts = query.rsplit(':', 1)
+                    if len(parts) == 2:
+                        try:
+                            potential_k = int(parts[1].strip())
+                            if 1 <= potential_k <= 1000:
+                                query = parts[0].strip()
+                                top_k = potential_k
+                        except ValueError:
+                            pass
+                
+                # Perform search
+                if index_type == 'tfidf':
+                    # TF-IDF specific parsing
+                    ranking_method = 'tfidf'
+                    if query.upper().startswith('BM25:'):
+                        ranking_method = 'bm25'
+                        query = query[5:].strip()
+                    elif query.upper().startswith('TFIDF:'):
+                        ranking_method = 'tfidf'
+                        query = query[6:].strip()
+                    
+                    results = indexer.search(query.strip(), top_k=top_k, require_all_terms=require_all_terms, 
+                                           ranking_method=ranking_method)
+                    mode = "AND" if require_all_terms else "OR"
+                    print(f"\n[Search mode: {mode} | Ranking: {ranking_method.upper()}]")
+                    indexer.display_results(results)
+                else:  # lucene
+                    results = searcher.search(query.strip(), top_k=top_k, require_all_terms=require_all_terms)
+                    mode = "AND" if require_all_terms else "OR"
+                    print(f"\n[Search mode: {mode} | Index: Lucene]")
+                    searcher.display_results(results)
+                
+            except (KeyboardInterrupt, EOFError):
                 break
-            
-            if query.lower() == 'help':
-                print_help()
-                continue
-            
-            if not query:
-                continue
-            
-            # Parse search mode (AND/OR) and ranking method if specified
-            require_all_terms = True  # Default to AND
-            ranking_method = 'tfidf'  # Default to TF-IDF
-            
-            if query.upper().startswith('OR:'):
-                require_all_terms = False
-                query = query[3:].strip()
-            elif query.upper().startswith('AND:'):
-                require_all_terms = True
-                query = query[4:].strip()
-            
-            # Check for ranking method specification
-            if query.upper().startswith('BM25:'):
-                ranking_method = 'bm25'
-                query = query[5:].strip()
-            elif query.upper().startswith('TFIDF:'):
-                ranking_method = 'tfidf'
-                query = query[6:].strip()
-            
-            # Parse top_k if specified (e.g., "Nike:5" for top 5 results)
-            top_k = 10
-            if ':' in query:
-                query, top_k_str = query.rsplit(':', 1)
-                try:
-                    top_k = int(top_k_str.strip())
-                except ValueError:
-                    pass
-            
-            results = indexer.search(query.strip(), top_k=top_k, require_all_terms=require_all_terms, 
-                                   ranking_method=ranking_method)
-            
-            # Show which mode was used
-            mode = "AND" if require_all_terms else "OR"
-            method = ranking_method.upper()
-            print(f"\n[Search mode: {mode} | Ranking: {method}]")
-            
-            indexer.display_results(results)
-            
-        except (KeyboardInterrupt, EOFError):
-            break
+    finally:
+        # Cleanup
+        if searcher:
+            searcher.close_index()
     
     print("\nGoodbye!")
 
 
-def print_help():
+def print_help(index_type='tfidf'):
     """Print help information about search syntax."""
     print("\n" + "=" * 100)
     print("SEARCH HELP")
+    if index_type == 'lucene':
+        print("(Using Lucene Index)")
+    else:
+        print("(Using TF-IDF Index)")
     print("=" * 100)
     print("\nQuery Syntax:")
     print("  - Simple text search: 'Nike', 'IBM', 'nvidia'")
@@ -116,11 +263,6 @@ def print_help():
     print("    Example: 'exchange_nasdaq move_flat' or 'AND: exchange_nasdaq move_flat'")
     print("  - OR: Return documents matching ANY term")
     print("    Example: 'OR: exchange_nasdaq move_flat'")
-    print("\nRanking Methods:")
-    print("  - TF-IDF: (default) Cosine similarity with TF-IDF weighting")
-    print("    Example: 'Nike' or 'TFIDF: Nike'")
-    print("  - BM25: Better handling of term saturation and document length")
-    print("    Example: 'BM25: exchange_nyse cap_large'")
     print("\nSpecial Query Terms:")
     print("  Symbols:     symbol_aapl, symbol_ibm, symbol_nke")
     print("  Exchanges:   exchange_nyse, exchange_nasdaq, exchange_nse")

@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data files (will be mounted as volume)
+data/
+lucene/
+
+# Indexes
+indexes/
+
+# Output
+out/
+pages/
+text/
+wiki-test/
+
+# Git
+.git/
+.gitignore
+
+# Other
+*.pkl
+*.tsv.lock
+.DS_Store
+

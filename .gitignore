@@ -5,3 +5,10 @@ backup/
 html-backup/
 poc/
 venv/
+lucene-backup/
+helpers/
+out/
+
+lucene/
+data/
+text/

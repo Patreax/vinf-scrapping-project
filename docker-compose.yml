@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  lucene-indexer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./lucene:/app/lucene
+    command: ["/app/index_joined_data_lucene.py"]
+
+  lucene-searcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./lucene:/app/lucene
+    stdin_open: true
+    tty: true
+    command: ["/app/search.py", "--lucene"]
