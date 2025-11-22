@@ -50,7 +50,6 @@ def main():
     print("STAGE 2: Filtering Wikipedia pages by match keys")
     print("=" * 60)
     
-    # Load match keys
     print(f"\nLoading match keys from {args.keys}...")
     match_keys = load_match_keys(args.keys)
     print(f"Loaded {len(match_keys)} unique match keys")
@@ -156,7 +155,6 @@ def main():
     )
     
     # Save filtered pages immediately - single pass through Wikipedia
-    # Pages are filtered as they're read and saved directly
     print(f"\nSaving filtered pages to {args.out}...")
     os.makedirs(os.path.dirname(args.out) if os.path.dirname(args.out) else '.', exist_ok=True)
     

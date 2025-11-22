@@ -14,7 +14,6 @@ import sys
 import os
 from indexer import StockIndexer
 
-# Try to import Lucene searcher
 try:
     import lucene
     from index_joined_data_lucene import JoinedDataLuceneSearcher
@@ -86,15 +85,14 @@ def setup_tfidf_indexer(data_file=None):
     index_filename = f"indexes/{data_file.split('/')[-1].replace('.tsv', '_index.pkl')}"
     try:
         indexer.load_index(index_filename)
-        print("\n✓ Loaded existing TF-IDF index")
+        print("\nLoaded existing TF-IDF index")
     except FileNotFoundError:
-        print("\n✗ No existing index found, building new one...")
+        print("\nNo existing index found, building new one...")
         indexer.load_data()
         indexer.build_index()
         indexer.save_index(index_filename)
-        print(f"✓ Index saved to {index_filename}")
+        print(f"Index saved to {index_filename}")
     
-    # Print statistics
     indexer.print_statistics()
     
     return indexer
@@ -109,7 +107,7 @@ def setup_lucene_searcher(index_dir=None):
     # Initialize JVM for PyLucene
     try:
         lucene.initVM(vmargs=['-Djava.awt.headless=true'])
-        print("✓ JVM initialized for PyLucene")
+        print("JVM initialized for PyLucene")
     except Exception as e:
         print(f"Warning: JVM may already be initialized: {e}")
     
@@ -127,11 +125,11 @@ def setup_lucene_searcher(index_dir=None):
     searcher = JoinedDataLuceneSearcher(index_dir=index_dir)
     
     if not searcher.open_index():
-        print(f"\n✗ Error: Could not open Lucene index at {index_dir}")
+        print(f"\nError: Could not open Lucene index at {index_dir}")
         print("Please make sure the index exists. Run index_joined_data_lucene.py to create it.")
         return None
     
-    print("\n✓ Opened Lucene index")
+    print("\nOpened Lucene index")
     searcher.print_statistics()
     
     return searcher

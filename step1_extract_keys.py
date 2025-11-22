@@ -56,10 +56,8 @@ def main():
     print(f"Processed {len(rows)} rows")
     print(f"Found {len(match_keys_set)} unique match keys (3+ characters)")
     
-    # Sort match keys (already filtered to 3+ characters)
     match_keys = sorted(match_keys_set)
 
-    # Save all match keys to a single file (one per line)
     print(f"Writing match keys to {args.out_keys}...")
     os.makedirs(os.path.dirname(args.out_keys) if os.path.dirname(args.out_keys) else '.', exist_ok=True)
     with open(args.out_keys, 'w', encoding='utf-8') as f:
