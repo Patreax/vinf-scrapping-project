@@ -7,8 +7,6 @@ from datetime import datetime
 from typing import Dict, List, Set, Tuple, Any
 from pathlib import Path
 
-# TODO: vahy podla casu
-
 class StockIndexer:
     """TF-IDF indexer for stock market time-series data."""
     

@@ -12,7 +12,6 @@ Usage:
 
 import sys
 import os
-from indexer import StockIndexer
 
 try:
     import lucene
@@ -72,6 +71,12 @@ def choose_index_type():
 
 def setup_tfidf_indexer(data_file=None):
     """Setup and load TF-IDF indexer."""
+    try:
+        from indexer import StockIndexer
+    except ImportError:
+        print("Error: indexer module not found. Cannot use TF-IDF index.")
+        return None
+    
     if data_file is None:
         data_file = "data/extracted_data.tsv"
     
@@ -190,7 +195,11 @@ def main():
                     continue
                 
                 # Parse search mode (AND/OR)
-                require_all_terms = True  # Default to AND
+                # Default: OR for Lucene, AND for TF-IDF
+                if index_type == 'lucene':
+                    require_all_terms = False  # Default to OR for Lucene
+                else:
+                    require_all_terms = True  # Default to AND for TF-IDF
                 
                 if query.upper().startswith('OR:'):
                     require_all_terms = False

@@ -220,7 +220,6 @@ class JoinedDataLuceneIndexer:
         """
         doc = Document()
         
-        # TODO: some fields might be StringField instead of TextField
         # Company name (searchable)
         company = row.get('company', '').strip()
         if company:
@@ -239,24 +238,11 @@ class JoinedDataLuceneIndexer:
             doc.add(StringField("exchange", exchange.lower(), Field.Store.YES))
             doc.add(TextField("exchange_search", f"exchange_{exchange.lower()}", Field.Store.NO))
         
-        # TODO: this might not be required
-        # Store original values
-        if row.get('current_price'):
-            doc.add(StringField("current_price", row.get('current_price'), Field.Store.YES))
-        if row.get('market_cap'):
-            doc.add(StringField("market_cap", row.get('market_cap'), Field.Store.YES))
-        if row.get('calculated_percentage_change'):
-            doc.add(StringField("calculated_percentage_change", row.get('calculated_percentage_change'), Field.Store.YES))
-        if row.get('employees'):
-            doc.add(StringField("employees", row.get('employees'), Field.Store.YES))
-        if row.get('revenue'):
-            doc.add(StringField("revenue", row.get('revenue'), Field.Store.YES))
-        if row.get('founded'):
-            doc.add(StringField("founded", row.get('founded'), Field.Store.YES))
+        # Store timestamp (needed for recency weighting)
         if row.get('timestamp'):
             doc.add(StringField("timestamp", row.get('timestamp'), Field.Store.YES))
-        # if row.get('source_file'):
-        #     doc.add(StringField("source_file", row.get('source_file'), Field.Store.YES))
+        
+        # Store website
         if row.get('website'):
             doc.add(StringField("website", row.get('website'), Field.Store.YES))
         
@@ -270,7 +256,7 @@ class JoinedDataLuceneIndexer:
         if row.get('title'):
             doc.add(TextField("title", row.get('title'), Field.Store.YES))
         if row.get('keyword'):
-            doc.add(TextField("keyword", row.get('keyword'), Field.Store.YES))
+            doc.add(StringField("keyword", row.get('keyword'), Field.Store.YES))
         if row.get('first_paragraph'):
             doc.add(TextField("first_paragraph", row.get('first_paragraph'), Field.Store.YES))
         if row.get('description'):
@@ -279,32 +265,39 @@ class JoinedDataLuceneIndexer:
         # Bucketed fields (all searchable)
         price_bucket = self.bucket_price(row.get('current_price', ''))
         if price_bucket:
-            doc.add(TextField("price_bucket", price_bucket, Field.Store.YES))
+            doc.add(StringField("price_bucket", price_bucket, Field.Store.YES))
         
         cap_bucket = self.bucket_market_cap(row.get('market_cap', ''))
         if cap_bucket:
-            doc.add(TextField("cap_bucket", cap_bucket, Field.Store.YES))
+            doc.add(StringField("cap_bucket", cap_bucket, Field.Store.YES))
         
         change_bucket = self.bucket_price_change(row.get('calculated_percentage_change', ''))
         if change_bucket:
-            doc.add(TextField("change_bucket", change_bucket, Field.Store.YES))
+            doc.add(StringField("change_bucket", change_bucket, Field.Store.YES))
         
         emp_bucket = self.bucket_employees(row.get('employees', ''))
         if emp_bucket:
-            doc.add(TextField("size_bucket", emp_bucket, Field.Store.YES))
+            doc.add(StringField("size_bucket", emp_bucket, Field.Store.YES))
         
         rev_bucket = self.bucket_revenue(row.get('revenue', ''))
         if rev_bucket:
-            doc.add(TextField("rev_bucket", rev_bucket, Field.Store.YES))
+            doc.add(StringField("rev_bucket", rev_bucket, Field.Store.YES))
         
         founded_bucket = self.extract_year_from_founded(row.get('founded', ''))
         if founded_bucket:
-            doc.add(TextField("founded_bucket", founded_bucket, Field.Store.YES))
+            doc.add(StringField("founded_bucket", founded_bucket, Field.Store.YES))
         
-        # Combined searchable content field (for general search)
+        # Combined searchable content field (for general search across whole document)
+        # This field contains ALL searchable content from the document
         searchable_content = []
         if company:
             searchable_content.append(company)
+        if symbol:
+            searchable_content.append(symbol)
+            searchable_content.append(f"symbol_{symbol.lower()}")  # Include prefixed version
+        if exchange:
+            searchable_content.append(exchange)
+            searchable_content.append(f"exchange_{exchange.lower()}")  # Include prefixed version
         if row.get('industries'):
             searchable_content.append(row.get('industries'))
         if row.get('founders'):
@@ -414,23 +407,23 @@ class JoinedDataLuceneSearcher:
         self.half_life_days = half_life_days
         
         self.field_weights = {
-            'company': 1.0,
-            'industries': 1.0,
-            'founders': 1.0,
-            'headquarters': 1.0,
-            'title': 1.0,
-            'keyword': 1.0,
-            'first_paragraph': 1.0,
-            'description': 1.0,
-            'price_bucket': 1.0,
-            'cap_bucket': 1.0,
-            'change_bucket': 1.0,
-            'size_bucket': 1.0,
-            'rev_bucket': 1.0,
-            'founded_bucket': 1.0,
-            'symbol_search': 1.0,
-            'exchange_search': 1.0,
-            'content': 1.0,  # Combined field
+            'company': 4.0,  # Highest priority - company name matches are most important
+            'symbol_search': 3.0,  # Symbol matches are very important (e.g., "NVDA" for Nvidia)
+            'title': 2.0,  # Title matches are important
+            'keyword': 1.5,  # Keywords are moderately important
+            'industries': 1.2,  # Industry matches help with categorization
+            'founders': 1.0,  # Founder names are useful but less critical
+            'headquarters': 0.8,  # Location is less important for search relevance
+            'description': 0.6,  # Less useful since it can have false matches
+            'first_paragraph': 0.6,  # Less useful since it can have false matches
+            'price_bucket': 1.0,  # Bucketed fields are useful for filtering
+            'cap_bucket': 1.0,  # Bucketed fields are useful for filtering
+            'change_bucket': 1.0,  # Bucketed fields are useful for filtering
+            'size_bucket': 1.0,  # Bucketed fields are useful for filtering
+            'rev_bucket': 1.0,  # Bucketed fields are useful for filtering
+            'founded_bucket': 1.0,  # Bucketed fields are useful for filtering
+            'exchange_search': 0.8,  # Exchange is less important for relevance
+            'content': 1.0,  # Combined field (not used in multi-field search)
         }
         
         # Override with custom weights if provided
@@ -588,9 +581,12 @@ class JoinedDataLuceneSearcher:
         # Default weight if no valid timestamp found
         return 1.0
     
-    def search(self, query_str: str, top_k: int = 10, require_all_terms: bool = True) -> List[tuple]:
+    def search(self, query_str: str, top_k: int = 10, require_all_terms: bool = False) -> List[tuple]:
         """
-        Search the Lucene index across multiple searchable fields.
+        Search the Lucene index across multiple fields with field-specific boosts.
+        
+        This searches across individual fields (company, title, description, etc.) with
+        different importance weights, prioritizing company name matches over other fields.
         
         Returns a list of (doc_id, score, document_dict) tuples.
         """
@@ -606,60 +602,44 @@ class JoinedDataLuceneSearcher:
         
         try:
             from org.apache.lucene.queryparser.classic import QueryParser
-            from org.apache.lucene.search import BooleanQuery, BooleanClause
-            from org.apache.lucene.index import Term
-            from org.apache.lucene.search import TermQuery
+            from org.apache.lucene.search import BooleanQuery, BooleanClause, BoostQuery
             
-            # Search across multiple fields
-            search_fields = [
-                "company",
-                "title", 
-                "description",
-                "first_paragraph",
-                "industries",
-                "founders",
-                "headquarters",
-                "keyword",
-                "price_bucket",
-                "cap_bucket",
-                "change_bucket",
-                "size_bucket",
-                "rev_bucket",
-                "founded_bucket",
-                "symbol_search",
-                "exchange_search"
-            ]
-            
-            # Split query into terms
+            # Build query string based on require_all_terms
             query_terms = query_str.strip().split()
             
             if not query_terms:
                 return []
             
-            # Create a BooleanQuery for the overall query
-            main_query = BooleanQuery.Builder()
+            # If require_all_terms is True, use AND operator; otherwise use OR
+            if require_all_terms:
+                # Join terms with AND to require all terms
+                query_string = " AND ".join(query_terms)
+            else:
+                # Join terms with OR to match any term
+                query_string = " OR ".join(query_terms)
             
-            # For each term, create a query that searches across all fields (OR)
-            for term in query_terms:
-                term_query = BooleanQuery.Builder()
-                
-                # Search this term across all fields
-                for field in search_fields:
+            # Build a BooleanQuery that searches across multiple fields with boosts
+            boolean_query_builder = BooleanQuery.Builder()
+            
+            # Get list of fields to search and their boosts
+            # Only include fields that exist in field_weights
+            for field_name, weight in self.field_weights.items():
+                # Skip the 'content' field - we'll search individual fields instead
+                if field_name != 'content':
+                    # Create a QueryParser for this specific field
+                    field_parser = QueryParser(field_name, self.analyzer)
                     try:
-                        # Create a simple term query for this field
-                        field_term = Term(field, term.lower())
-                        term_query.add(TermQuery(field_term), BooleanClause.Occur.SHOULD)
+                        # Parse the query for this field
+                        field_query = field_parser.parse(query_string)
+                        # Apply boost and add to BooleanQuery with SHOULD (OR) clause
+                        boosted_query = BoostQuery(field_query, float(weight))
+                        boolean_query_builder.add(boosted_query, BooleanClause.Occur.SHOULD)
                     except Exception:
-                        continue
-                
-                term_query_built = term_query.build()
-                # Add this term's query to main query with MUST (AND) or SHOULD (OR)
-                if require_all_terms:
-                    main_query.add(term_query_built, BooleanClause.Occur.MUST)
-                else:
-                    main_query.add(term_query_built, BooleanClause.Occur.SHOULD)
+                        # If parsing fails for this field, skip it
+                        pass
             
-            query = main_query.build()
+            # Build the final BooleanQuery
+            query = boolean_query_builder.build()
             
             # Execute search
             top_docs = self.searcher.search(query, top_k)
@@ -681,10 +661,9 @@ class JoinedDataLuceneSearcher:
                         doc_dict[field_name] = field_value
                 
                 # Apply recency weighting
-                # Try to get timestamp from timestamp field, or extract from source_file
+                # Get timestamp from timestamp field
                 timestamp_str = doc_dict.get('timestamp', '')
-                source_file = doc_dict.get('source_file', '')
-                recency_weight = self._compute_recency_weight(timestamp_str, source_file)
+                recency_weight = self._compute_recency_weight(timestamp_str, None)
                 final_score = lucene_score * recency_weight
                 
                 results.append((doc_id, final_score, doc_dict))
@@ -713,24 +692,20 @@ class JoinedDataLuceneSearcher:
             company = doc.get('company', 'N/A')
             symbol = doc.get('symbol', 'N/A')
             exchange = doc.get('exchange', 'N/A')
-            price = doc.get('current_price', 'N/A')
-            change = doc.get('calculated_percentage_change', 'N/A')
-            market_cap = doc.get('market_cap', 'N/A')
-            # Try to get timestamp from timestamp field, or extract from source_file
             timestamp = doc.get('timestamp', 'N/A')
-            source_file = doc.get('source_file', '')
-            if timestamp == 'N/A' or timestamp == '2025-11-09 19:15:21':  # If it's the join timestamp, try to extract from filename
-                extracted_ts = self._extract_timestamp_from_filename(source_file)
-                if extracted_ts:
-                    timestamp = extracted_ts
-            founded = doc.get('founded', 'N/A')
-            revenue = doc.get('revenue', 'N/A')
-            employees = doc.get('employees', 'N/A')
+            
+            # Get bucketed values instead of original values
+            price_bucket = doc.get('price_bucket', 'N/A')
+            change_bucket = doc.get('change_bucket', 'N/A')
+            cap_bucket = doc.get('cap_bucket', 'N/A')
+            founded_bucket = doc.get('founded_bucket', 'N/A')
+            rev_bucket = doc.get('rev_bucket', 'N/A')
+            size_bucket = doc.get('size_bucket', 'N/A')
             
             print(f"{rank}. {company} ({symbol})")
-            print(f"   Exchange: {exchange} | Price: {price} | Change: {change}")
-            print(f"   Market Cap: {market_cap} | Founded: {founded}")
-            print(f"   Revenue: {revenue} | Employees: {employees}")
+            print(f"   Exchange: {exchange} | Price Bucket: {price_bucket} | Change Bucket: {change_bucket}")
+            print(f"   Market Cap Bucket: {cap_bucket} | Founded Bucket: {founded_bucket}")
+            print(f"   Revenue Bucket: {rev_bucket} | Size Bucket: {size_bucket}")
             print(f"   Timestamp: {timestamp}")
             print(f"   Relevance Score: {score:.4f}")
             print("-" * 100)
