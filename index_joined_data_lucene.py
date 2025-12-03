@@ -17,16 +17,18 @@ from typing import Dict, List, Optional
 try:
     import lucene
     from java.nio.file import Paths
+    from java.lang import Long, Double
     from org.apache.lucene.analysis.standard import StandardAnalyzer
     from org.apache.lucene.document import Document, Field, FieldType, StringField, TextField
     from org.apache.lucene.index import IndexWriter, IndexWriterConfig, IndexOptions
     from org.apache.lucene.store import FSDirectory
+    from org.apache.lucene.document import LongPoint, DoublePoint
 except ImportError as e:
     print("Error: PyLucene is not properly installed or initialized.")
     print(f"Import error: {e}")
     sys.exit(1)
 
-
+# query: public company technology software nasdaq founded>2000 employees>1000
 class JoinedDataLuceneIndexer:
     """PyLucene indexer for joined company data with bucketing."""
     
@@ -214,6 +216,110 @@ class JoinedDataLuceneIndexer:
         except (ValueError, AttributeError):
             return None
     
+    def parse_numeric_price(self, price: str) -> Optional[float]:
+        """Parse price string (e.g., '$25', '$476.7') to float."""
+        try:
+            return float(price.replace('$', '').replace(',', '').strip())
+        except (ValueError, AttributeError):
+            return None
+    
+    def parse_numeric_percentage_change(self, change_pct: str) -> Optional[float]:
+        """Parse percentage change string (e.g., '+0.16%', '-5.2%') to float."""
+        try:
+            return float(change_pct.replace('%', '').replace('+', '').strip())
+        except (ValueError, AttributeError):
+            return None
+    
+    def parse_numeric_market_cap(self, market_cap: str) -> Optional[float]:
+        """Parse market cap string (e.g., '2.34B USD', '99.25B INR') to float in USD."""
+        try:
+            value_str = market_cap.replace('USD', '').replace('INR', '').replace('$', '').strip()
+            if not value_str:
+                return None
+            
+            if 'B' in value_str:
+                value = float(value_str.replace('B', '').strip()) * 1_000_000_000
+            elif 'M' in value_str:
+                value = float(value_str.replace('M', '').strip()) * 1_000_000
+            else:
+                value = float(value_str)
+            
+            # Convert INR to USD (approximate rate, adjust if needed)
+            if 'INR' in market_cap:
+                value = value / 83.0  # Approximate conversion rate
+            
+            return value
+        except (ValueError, AttributeError):
+            return None
+    
+    def parse_numeric_employees(self, employees: str) -> Optional[int]:
+        """Parse employees string (e.g., '388', '32,100') to int."""
+        try:
+            return int(employees.replace(',', '').strip())
+        except (ValueError, AttributeError):
+            return None
+    
+    def parse_numeric_founded(self, founded: str) -> Optional[int]:
+        """Parse founded year string (e.g., '1933') to int."""
+        try:
+            founded = founded.strip()
+            if not founded:
+                return None
+            
+            # Try to find a 4-digit year in the string
+            year_match = re.search(r'\b(\d{4})\b', founded)
+            if year_match:
+                return int(year_match.group(1))
+            return None
+        except (ValueError, AttributeError):
+            return None
+    
+    def parse_numeric_revenue(self, revenue: str) -> Optional[float]:
+        """Parse revenue string (e.g., '4.09B', '$100M') to float in USD."""
+        try:
+            value_str = revenue.replace('$', '').strip()
+            if not value_str:
+                return None
+            
+            if 'B' in value_str:
+                value = float(value_str.replace('B', '').strip()) * 1_000_000_000
+            elif 'M' in value_str:
+                value = float(value_str.replace('M', '').strip()) * 1_000_000
+            else:
+                value = float(value_str)
+            
+            return value
+        except (ValueError, AttributeError):
+            return None
+    
+    def parse_numeric_ebitda(self, ebitda: str) -> Optional[float]:
+        """Parse EBITDA string (e.g., '990.61M', '$50B') to float in USD."""
+        try:
+            value_str = ebitda.replace('$', '').strip()
+            if not value_str:
+                return None
+            
+            if 'B' in value_str:
+                value = float(value_str.replace('B', '').strip()) * 1_000_000_000
+            elif 'M' in value_str:
+                value = float(value_str.replace('M', '').strip()) * 1_000_000
+            else:
+                value = float(value_str)
+            
+            return value
+        except (ValueError, AttributeError):
+            return None
+    
+    def parse_timestamp_to_epoch(self, timestamp_str: str) -> Optional[int]:
+        """Parse timestamp string (e.g., '2025-10-17 13:31:13') to Unix epoch seconds."""
+        try:
+            if not timestamp_str:
+                return None
+            dt = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+            return int(dt.timestamp())
+        except (ValueError, AttributeError):
+            return None
+    
     def create_document(self, row: Dict[str, str]) -> Document:
         """
         Create a Lucene document from a row of joined data.
@@ -241,6 +347,10 @@ class JoinedDataLuceneIndexer:
         # Store timestamp (needed for recency weighting)
         if row.get('timestamp'):
             doc.add(StringField("timestamp", row.get('timestamp'), Field.Store.YES))
+            # Also store as numeric for range queries (Unix epoch seconds)
+            timestamp_epoch = self.parse_timestamp_to_epoch(row.get('timestamp'))
+            if timestamp_epoch is not None:
+                doc.add(LongPoint("timestamp_numeric", timestamp_epoch))
         
         # Store website
         if row.get('website'):
@@ -267,25 +377,60 @@ class JoinedDataLuceneIndexer:
         if price_bucket:
             doc.add(StringField("price_bucket", price_bucket, Field.Store.YES))
         
+        # Store numeric price for range queries
+        price_numeric = self.parse_numeric_price(row.get('current_price', ''))
+        if price_numeric is not None:
+            doc.add(DoublePoint("current_price_numeric", price_numeric))
+        
         cap_bucket = self.bucket_market_cap(row.get('market_cap', ''))
         if cap_bucket:
             doc.add(StringField("cap_bucket", cap_bucket, Field.Store.YES))
+        
+        # Store numeric market cap for range queries
+        market_cap_numeric = self.parse_numeric_market_cap(row.get('market_cap', ''))
+        if market_cap_numeric is not None:
+            doc.add(DoublePoint("market_cap_numeric", market_cap_numeric))
         
         change_bucket = self.bucket_price_change(row.get('calculated_percentage_change', ''))
         if change_bucket:
             doc.add(StringField("change_bucket", change_bucket, Field.Store.YES))
         
+        # Store numeric percentage change for range queries
+        change_numeric = self.parse_numeric_percentage_change(row.get('calculated_percentage_change', ''))
+        if change_numeric is not None:
+            doc.add(DoublePoint("calculated_percentage_change_numeric", change_numeric))
+        
         emp_bucket = self.bucket_employees(row.get('employees', ''))
         if emp_bucket:
             doc.add(StringField("size_bucket", emp_bucket, Field.Store.YES))
+        
+        # Store numeric employees for range queries
+        employees_numeric = self.parse_numeric_employees(row.get('employees', ''))
+        if employees_numeric is not None:
+            doc.add(LongPoint("employees_numeric", employees_numeric))
         
         rev_bucket = self.bucket_revenue(row.get('revenue', ''))
         if rev_bucket:
             doc.add(StringField("rev_bucket", rev_bucket, Field.Store.YES))
         
+        # Store numeric revenue for range queries
+        revenue_numeric = self.parse_numeric_revenue(row.get('revenue', ''))
+        if revenue_numeric is not None:
+            doc.add(DoublePoint("revenue_numeric", revenue_numeric))
+        
         founded_bucket = self.extract_year_from_founded(row.get('founded', ''))
         if founded_bucket:
             doc.add(StringField("founded_bucket", founded_bucket, Field.Store.YES))
+        
+        # Store numeric founded year for range queries
+        founded_numeric = self.parse_numeric_founded(row.get('founded', ''))
+        if founded_numeric is not None:
+            doc.add(LongPoint("founded_numeric", founded_numeric))
+        
+        # Store numeric EBITDA for range queries
+        ebitda_numeric = self.parse_numeric_ebitda(row.get('ebitda', ''))
+        if ebitda_numeric is not None:
+            doc.add(DoublePoint("ebitda_numeric", ebitda_numeric))
         
         # Combined searchable content field (for general search across whole document)
         # This field contains ALL searchable content from the document
@@ -396,7 +541,8 @@ class JoinedDataLuceneSearcher:
     
     def __init__(self, index_dir: str = "lucene/joined_company_data_index", 
                  field_weights: Optional[Dict[str, float]] = None,
-                 half_life_days: float = 7.0):
+                 half_life_days: float = 62.0,
+                 recency_punishment_factor: float = 5.0):
         self.index_dir = index_dir
         self.analyzer = StandardAnalyzer()
         self.directory = None
@@ -405,12 +551,13 @@ class JoinedDataLuceneSearcher:
         
         # Recency weighting parameters
         self.half_life_days = half_life_days
+        self.recency_punishment_factor = recency_punishment_factor
         
         self.field_weights = {
-            'company': 4.0,  # Highest priority - company name matches are most important
-            'symbol_search': 3.0,  # Symbol matches are very important (e.g., "NVDA" for Nvidia)
-            'title': 2.0,  # Title matches are important
-            'keyword': 1.5,  # Keywords are moderately important
+            'company': 1.3,  # Highest priority - company name matches are most important
+            'symbol_search': 1.3,  # Symbol matches are very important (e.g., "NVDA" for Nvidia)
+            'title': 1.3,  # Title matches are important
+            'keyword': 1.1,  # Keywords are moderately important
             'industries': 1.2,  # Industry matches help with categorization
             'founders': 1.0,  # Founder names are useful but less critical
             'headquarters': 0.8,  # Location is less important for search relevance
@@ -530,7 +677,14 @@ class JoinedDataLuceneSearcher:
         """
         Compute exponential decay weight for a document based on timestamp.
         
-        Weight function uses half-life: weight = exp(-ln2 * (age_days / half_life_days))
+        Weight function uses half-life with punishment factor:
+        weight = exp(-ln2 * recency_punishment_factor * (age_days / half_life_days))
+        
+        The recency_punishment_factor controls how aggressively older records are penalized:
+        - factor = 1.0: Standard exponential decay (default)
+        - factor > 1.0: More aggressive penalty for older records (e.g., 1.5, 2.0)
+        - factor < 1.0: Less aggressive penalty (e.g., 0.5)
+        
         Documents without a valid timestamp receive weight 1.0.
         
         If timestamp_str is not valid, tries to extract timestamp from source_file filename.
@@ -551,7 +705,7 @@ class JoinedDataLuceneSearcher:
                 
                 if self.half_life_days > 0:
                     ln2 = math.log(2)
-                    weight = math.exp(-ln2 * (age_days / self.half_life_days))
+                    weight = math.exp(-ln2 * self.recency_punishment_factor * (age_days / self.half_life_days))
                 else:
                     weight = 1.0
                 
@@ -570,7 +724,7 @@ class JoinedDataLuceneSearcher:
                     
                     if self.half_life_days > 0:
                         ln2 = math.log(2)
-                        weight = math.exp(-ln2 * (age_days / self.half_life_days))
+                        weight = math.exp(-ln2 * self.recency_punishment_factor * (age_days / self.half_life_days))
                     else:
                         weight = 1.0
                     
@@ -581,7 +735,50 @@ class JoinedDataLuceneSearcher:
         # Default weight if no valid timestamp found
         return 1.0
     
-    def search(self, query_str: str, top_k: int = 10, require_all_terms: bool = False) -> List[tuple]:
+    def _deduplicate_by_symbol(self, results: List[tuple]) -> List[tuple]:
+        """
+        Deduplicate results by company symbol, keeping the best (highest scoring) result per symbol.
+        
+        Args:
+            results: List of (doc_id, score, document_dict) tuples
+        
+        Returns:
+            Deduplicated list of results, keeping only the best result per unique symbol
+        """
+        if not results:
+            return results
+        
+        # Group by symbol, keeping the best (highest scoring) result for each symbol
+        symbol_to_best_result = {}
+        
+        for result in results:
+            doc_id, score, doc_dict = result
+            symbol = doc_dict.get('symbol', '').lower().strip() if doc_dict.get('symbol') else ''
+            
+            # Use symbol as key, or fallback to company name if symbol is missing
+            if not symbol:
+                symbol = doc_dict.get('company', '').lower().strip() if doc_dict.get('company') else ''
+            
+            # Skip if we still don't have a key
+            if not symbol:
+                continue
+            
+            # Keep the result with the highest score for this symbol
+            if symbol not in symbol_to_best_result:
+                symbol_to_best_result[symbol] = result
+            else:
+                # Compare scores and keep the better one
+                existing_score = symbol_to_best_result[symbol][1]
+                if score > existing_score:
+                    symbol_to_best_result[symbol] = result
+        
+        # Convert back to list and sort by score
+        deduplicated = list(symbol_to_best_result.values())
+        deduplicated.sort(key=lambda x: x[1], reverse=True)
+        
+        return deduplicated
+    
+    def search(self, query_str: str, top_k: int = 5, require_all_terms: bool = False) -> List[tuple]:
         """
         Search the Lucene index across multiple fields with field-specific boosts.
         
@@ -641,8 +838,10 @@ class JoinedDataLuceneSearcher:
             # Build the final BooleanQuery
             query = boolean_query_builder.build()
             
-            # Execute search
-            top_docs = self.searcher.search(query, top_k)
+            # Fetch more results to ensure diversity (get unique companies)
+            # Fetch 10x more results to ensure we have enough unique companies
+            fetch_count = max(top_k * 10, 50)
+            top_docs = self.searcher.search(query, fetch_count)
             
             # Extract results
             results = []
@@ -671,10 +870,313 @@ class JoinedDataLuceneSearcher:
             # Re-sort by final score (recency-weighted)
             results.sort(key=lambda x: x[1], reverse=True)
             
-            return results
+            # Return top_k results (may include same company multiple times if they rank high)
+            return results[:top_k]
             
         except Exception as e:
             print(f"Search error: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+    
+    def range_query(self, range_filters: Dict[str, Dict[str, Optional[float]]], 
+                    top_k: int = 5) -> List[tuple]:
+        """
+        Execute range queries on numeric fields.
+        
+        Args:
+            range_filters: Dictionary mapping field names to range specifications.
+                          Each range spec is a dict with optional 'min' and 'max' keys.
+                          Supported fields:
+                          - 'timestamp' (Unix epoch seconds)
+                          - 'current_price' (float)
+                          - 'calculated_percentage_change' (float)
+                          - 'market_cap' (float, in USD)
+                          - 'founded' (int, year)
+                          - 'employees' (int)
+                          - 'revenue' (float, in USD)
+                          - 'ebitda' (float, in USD)
+            top_k: Maximum number of results to return
+        
+        Returns:
+            List of (doc_id, score, document_dict) tuples
+        
+        Example:
+            # Find companies with employees > 1000 and < 50000
+            results = searcher.range_query({
+                'employees': {'min': 1000, 'max': 50000}
+            })
+            
+            # Find companies with market cap > 1B and revenue > 100M
+            results = searcher.range_query({
+                'market_cap': {'min': 1_000_000_000},
+                'revenue': {'min': 100_000_000}
+            })
+        """
+        if not self.searcher:
+            if not self.open_index():
+                print("Error: Could not open index")
+                return []
+        
+        # Check index has documents
+        if self.reader.numDocs() == 0:
+            print("Warning: Index contains no documents")
+            return []
+        
+        try:
+            from org.apache.lucene.search import BooleanQuery, BooleanClause
+            
+            # Map user-friendly field names to internal numeric field names
+            field_mapping = {
+                'timestamp': 'timestamp_numeric',
+                'current_price': 'current_price_numeric',
+                'calculated_percentage_change': 'calculated_percentage_change_numeric',
+                'market_cap': 'market_cap_numeric',
+                'founded': 'founded_numeric',
+                'employees': 'employees_numeric',
+                'revenue': 'revenue_numeric',
+                'ebitda': 'ebitda_numeric'
+            }
+            
+            # Build BooleanQuery with range filters
+            boolean_query_builder = BooleanQuery.Builder()
+            
+            for field_name, range_spec in range_filters.items():
+                if field_name not in field_mapping:
+                    print(f"Warning: Unknown field '{field_name}'. Supported fields: {list(field_mapping.keys())}")
+                    continue
+                
+                internal_field = field_mapping[field_name]
+                min_val = range_spec.get('min')
+                max_val = range_spec.get('max')
+                
+                if min_val is None and max_val is None:
+                    continue  # Skip empty range specs
+                
+                # Determine if this is a LongPoint or DoublePoint field
+                is_long_field = field_name in ['timestamp', 'founded', 'employees']
+                
+                if is_long_field:
+                    # Use LongPoint for integer fields
+                    min_long = int(min_val) if min_val is not None else None
+                    max_long = int(max_val) if max_val is not None else None
+                    
+                    if min_long is not None and max_long is not None:
+                        range_query = LongPoint.newRangeQuery(internal_field, min_long, max_long)
+                    elif min_long is not None:
+                        range_query = LongPoint.newRangeQuery(internal_field, min_long, Long.MAX_VALUE)
+                    elif max_long is not None:
+                        range_query = LongPoint.newRangeQuery(internal_field, Long.MIN_VALUE, max_long)
+                    else:
+                        continue
+                else:
+                    # Use DoublePoint for float fields
+                    min_double = float(min_val) if min_val is not None else None
+                    max_double = float(max_val) if max_val is not None else None
+                    
+                    if min_double is not None and max_double is not None:
+                        range_query = DoublePoint.newRangeQuery(internal_field, min_double, max_double)
+                    elif min_double is not None:
+                        range_query = DoublePoint.newRangeQuery(internal_field, min_double, Double.MAX_VALUE)
+                    elif max_double is not None:
+                        range_query = DoublePoint.newRangeQuery(internal_field, Double.MIN_VALUE, max_double)
+                    else:
+                        continue
+                
+                # Add range query as MUST clause (AND condition)
+                boolean_query_builder.add(range_query, BooleanClause.Occur.MUST)
+            
+            # Build the final query
+            query = boolean_query_builder.build()
+            
+            # Fetch more results to ensure diversity (get unique companies)
+            fetch_count = max(top_k * 5, 50)
+            top_docs = self.searcher.search(query, fetch_count)
+            
+            # Extract results
+            results = []
+            stored_fields = self.searcher.storedFields()
+            for score_doc in top_docs.scoreDocs:
+                doc_id = score_doc.doc
+                lucene_score = score_doc.score
+                doc = stored_fields.document(doc_id)
+                
+                # Convert Lucene document to dictionary
+                doc_dict = {}
+                for field in doc.getFields():
+                    field_name = field.name()
+                    field_value = doc.get(field_name)
+                    if field_value:
+                        doc_dict[field_name] = field_value
+                
+                # Apply recency weighting
+                timestamp_str = doc_dict.get('timestamp', '')
+                recency_weight = self._compute_recency_weight(timestamp_str, None)
+                final_score = lucene_score * recency_weight
+                
+                results.append((doc_id, final_score, doc_dict))
+            
+            # Re-sort by final score (recency-weighted)
+            results.sort(key=lambda x: x[1], reverse=True)
+            
+            # Return top_k results (may include same company multiple times if they rank high)
+            return results[:top_k]
+            
+        except Exception as e:
+            print(f"Range query error: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+    
+    def search_with_range_filters(self, query_str: str, range_filters: Dict[str, Dict[str, Optional[float]]] = None,
+                                  top_k: int = 5, require_all_terms: bool = False) -> List[tuple]:
+        """
+        Combine text search with range query filters.
+        
+        Args:
+            query_str: Text query string to search across fields
+            range_filters: Optional dictionary of range filters (same format as range_query)
+            top_k: Maximum number of results to return
+            require_all_terms: If True, all query terms must match (AND); otherwise any term matches (OR)
+        
+        Returns:
+            List of (doc_id, score, document_dict) tuples
+        
+        Example:
+            # Search for "tech" companies with employees > 1000
+            results = searcher.search_with_range_filters(
+                "tech",
+                range_filters={'employees': {'min': 1000}}
+            )
+        """
+        if not self.searcher:
+            if not self.open_index():
+                print("Error: Could not open index")
+                return []
+        
+        # Check index has documents
+        if self.reader.numDocs() == 0:
+            print("Warning: Index contains no documents")
+            return []
+        
+        try:
+            from org.apache.lucene.queryparser.classic import QueryParser
+            from org.apache.lucene.search import BooleanQuery, BooleanClause, BoostQuery
+            
+            # Build text search query (same as search method)
+            query_terms = query_str.strip().split()
+            if not query_terms:
+                # If no text query, just do range query
+                if range_filters:
+                    return self.range_query(range_filters, top_k)
+                return []
+            
+            if require_all_terms:
+                query_string = " AND ".join(query_terms)
+            else:
+                query_string = " OR ".join(query_terms)
+            
+            boolean_query_builder = BooleanQuery.Builder()
+            
+            # Add text search clauses
+            for field_name, weight in self.field_weights.items():
+                if field_name != 'content':
+                    field_parser = QueryParser(field_name, self.analyzer)
+                    try:
+                        field_query = field_parser.parse(query_string)
+                        boosted_query = BoostQuery(field_query, float(weight))
+                        boolean_query_builder.add(boosted_query, BooleanClause.Occur.SHOULD)
+                    except Exception:
+                        pass
+            
+            # Add range filter clauses if provided
+            if range_filters:
+                field_mapping = {
+                    'timestamp': 'timestamp_numeric',
+                    'current_price': 'current_price_numeric',
+                    'calculated_percentage_change': 'calculated_percentage_change_numeric',
+                    'market_cap': 'market_cap_numeric',
+                    'founded': 'founded_numeric',
+                    'employees': 'employees_numeric',
+                    'revenue': 'revenue_numeric',
+                    'ebitda': 'ebitda_numeric'
+                }
+                
+                for field_name, range_spec in range_filters.items():
+                    if field_name not in field_mapping:
+                        continue
+                    
+                    internal_field = field_mapping[field_name]
+                    min_val = range_spec.get('min')
+                    max_val = range_spec.get('max')
+                    
+                    if min_val is None and max_val is None:
+                        continue
+                    
+                    is_long_field = field_name in ['timestamp', 'founded', 'employees']
+                    
+                    if is_long_field:
+                        min_long = int(min_val) if min_val is not None else None
+                        max_long = int(max_val) if max_val is not None else None
+                        
+                        if min_long is not None and max_long is not None:
+                            range_query = LongPoint.newRangeQuery(internal_field, min_long, max_long)
+                        elif min_long is not None:
+                            range_query = LongPoint.newRangeQuery(internal_field, min_long, Long.MAX_VALUE)
+                        elif max_long is not None:
+                            range_query = LongPoint.newRangeQuery(internal_field, Long.MIN_VALUE, max_long)
+                        else:
+                            continue
+                    else:
+                        min_double = float(min_val) if min_val is not None else None
+                        max_double = float(max_val) if max_val is not None else None
+                        
+                        if min_double is not None and max_double is not None:
+                            range_query = DoublePoint.newRangeQuery(internal_field, min_double, max_double)
+                        elif min_double is not None:
+                            range_query = DoublePoint.newRangeQuery(internal_field, min_double, Double.MAX_VALUE)
+                        elif max_double is not None:
+                            range_query = DoublePoint.newRangeQuery(internal_field, Double.MIN_VALUE, max_double)
+                        else:
+                            continue
+                    
+                    boolean_query_builder.add(range_query, BooleanClause.Occur.MUST)
+            
+            # Build and execute query
+            query = boolean_query_builder.build()
+            
+            # Fetch more results to ensure diversity (get unique companies)
+            fetch_count = max(top_k * 5, 50)
+            top_docs = self.searcher.search(query, fetch_count)
+            
+            # Extract results
+            results = []
+            stored_fields = self.searcher.storedFields()
+            for score_doc in top_docs.scoreDocs:
+                doc_id = score_doc.doc
+                lucene_score = score_doc.score
+                doc = stored_fields.document(doc_id)
+                
+                doc_dict = {}
+                for field in doc.getFields():
+                    field_name = field.name()
+                    field_value = doc.get(field_name)
+                    if field_value:
+                        doc_dict[field_name] = field_value
+                
+                timestamp_str = doc_dict.get('timestamp', '')
+                recency_weight = self._compute_recency_weight(timestamp_str, None)
+                final_score = lucene_score * recency_weight
+                
+                results.append((doc_id, final_score, doc_dict))
+            
+            results.sort(key=lambda x: x[1], reverse=True)
+            
+            # Return top_k results (may include same company multiple times if they rank high)
+            return results[:top_k]
+            
+        except Exception as e:
+            print(f"Search with range filters error: {e}")
             import traceback
             traceback.print_exc()
             return []
@@ -723,7 +1225,7 @@ class JoinedDataLuceneSearcher:
             print("=" * 100)
             print(f"Total documents: {num_docs}")
             print(f"Index location: {self.index_dir}")
-            print(f"Recency weighting: half_life_days = {self.half_life_days}")
+            print(f"Recency weighting: half_life_days = {self.half_life_days}, punishment_factor = {self.recency_punishment_factor}")
             
             # Try to get field names and sample content from a document
             if num_docs > 0 and self.searcher:

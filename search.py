@@ -127,6 +127,12 @@ def setup_lucene_searcher(index_dir=None):
     # Example:
     #   custom_weights = {'company': 2.0, 'title': 1.5, 'description': 1.2}
     #   searcher = JoinedDataLuceneSearcher(index_dir=index_dir, field_weights=custom_weights)
+    # 
+    # To make recency weighting more aggressive (penalize older records more):
+    #   searcher = JoinedDataLuceneSearcher(index_dir=index_dir, recency_punishment_factor=1.5)
+    #   - factor = 1.0: Standard decay (default)
+    #   - factor > 1.0: More aggressive (e.g., 1.5, 2.0)
+    #   - factor < 1.0: Less aggressive (e.g., 0.5)
     searcher = JoinedDataLuceneSearcher(index_dir=index_dir)
     
     if not searcher.open_index():
@@ -174,6 +180,7 @@ def main():
     print("\nEnter search queries (or 'quit' to exit, 'help' for examples)")
     if index_type == 'lucene':
         print("Type 'weights' to see current field boost weights")
+        print("Type 'range' for interactive range query builder")
     
     try:
         while True:
@@ -189,6 +196,10 @@ def main():
                 
                 if query.lower() == 'weights' and index_type == 'lucene':
                     searcher.print_field_weights()
+                    continue
+                
+                if query.lower() == 'range' and index_type == 'lucene':
+                    interactive_range_query(searcher)
                     continue
                 
                 if not query:
@@ -209,7 +220,7 @@ def main():
                     query = query[4:].strip()
                 
                 # Parse top_k if specified (e.g., "Nike:5" for top 5 results)
-                top_k = 10
+                top_k = 5
                 if ':' in query and not query.upper().startswith(('OR:', 'AND:')):
                     parts = query.rsplit(':', 1)
                     if len(parts) == 2:
@@ -221,27 +232,51 @@ def main():
                         except ValueError:
                             pass
                 
+                # Parse range filters from query (for Lucene only)
+                range_filters = None
+                text_query = query
+                if index_type == 'lucene':
+                    text_query, range_filters = parse_range_filters_from_query(query)
+                
                 # Perform search
                 if index_type == 'tfidf':
                     # TF-IDF specific parsing
                     ranking_method = 'tfidf'
-                    if query.upper().startswith('BM25:'):
+                    if text_query.upper().startswith('BM25:'):
                         ranking_method = 'bm25'
-                        query = query[5:].strip()
-                    elif query.upper().startswith('TFIDF:'):
+                        text_query = text_query[5:].strip()
+                    elif text_query.upper().startswith('TFIDF:'):
                         ranking_method = 'tfidf'
-                        query = query[6:].strip()
+                        text_query = text_query[6:].strip()
                     
-                    results = indexer.search(query.strip(), top_k=top_k, require_all_terms=require_all_terms, 
+                    results = indexer.search(text_query.strip(), top_k=top_k, require_all_terms=require_all_terms, 
                                            ranking_method=ranking_method)
                     mode = "AND" if require_all_terms else "OR"
                     print(f"\n[Search mode: {mode} | Ranking: {ranking_method.upper()}]")
                     indexer.display_results(results)
                 else:  # lucene
-                    results = searcher.search(query.strip(), top_k=top_k, require_all_terms=require_all_terms)
-                    mode = "AND" if require_all_terms else "OR"
-                    print(f"\n[Search mode: {mode} | Index: Lucene]")
-                    searcher.display_results(results)
+                    if range_filters and not text_query.strip():
+                        # Pure range query
+                        results = searcher.range_query(range_filters, top_k=top_k)
+                        print(f"\n[Range Query | Index: Lucene]")
+                        searcher.display_results(results)
+                    elif range_filters:
+                        # Combined text + range query
+                        results = searcher.search_with_range_filters(
+                            text_query.strip(), 
+                            range_filters=range_filters,
+                            top_k=top_k, 
+                            require_all_terms=require_all_terms
+                        )
+                        mode = "AND" if require_all_terms else "OR"
+                        print(f"\n[Search mode: {mode} | Range filters: {len(range_filters)} | Index: Lucene]")
+                        searcher.display_results(results)
+                    else:
+                        # Pure text search
+                        results = searcher.search(text_query.strip(), top_k=top_k, require_all_terms=require_all_terms)
+                        mode = "AND" if require_all_terms else "OR"
+                        print(f"\n[Search mode: {mode} | Index: Lucene]")
+                        searcher.display_results(results)
                 
             except (KeyboardInterrupt, EOFError):
                 break
@@ -251,6 +286,169 @@ def main():
             searcher.close_index()
     
     print("\nGoodbye!")
+
+
+def parse_range_filters_from_query(query: str):
+    """
+    Parse range filters from query string.
+    
+    Supports syntax:
+    - range:field:min:max (e.g., range:employees:1000:50000)
+    - range:field:min (e.g., range:employees:1000 for min only)
+    - field>min (e.g., employees>1000)
+    - field<max (e.g., employees<50000)
+    - field:min-max (e.g., employees:1000-50000)
+    
+    Returns: (text_query, range_filters_dict)
+    """
+    import re
+    
+    range_filters = {}
+    text_query = query
+    
+    # Pattern 1: range:field:min:max or range:field:min
+    pattern1 = r'\brange:(\w+):([\d.]+)(?::([\d.]+))?\b'
+    matches = re.finditer(pattern1, query)
+    for match in matches:
+        field = match.group(1)
+        min_val = float(match.group(2))
+        max_val = float(match.group(3)) if match.group(3) else None
+        
+        if field not in range_filters:
+            range_filters[field] = {}
+        if min_val is not None:
+            range_filters[field]['min'] = min_val
+        if max_val is not None:
+            range_filters[field]['max'] = max_val
+        
+        # Remove from text query
+        text_query = text_query.replace(match.group(0), '').strip()
+    
+    # Pattern 2: field>min or field<max
+    pattern2 = r'(\w+)([><])([\d.]+)'
+    matches = re.finditer(pattern2, query)
+    for match in matches:
+        field = match.group(1)
+        operator = match.group(2)
+        value = float(match.group(3))
+        
+        if field not in range_filters:
+            range_filters[field] = {}
+        
+        if operator == '>':
+            range_filters[field]['min'] = value
+        elif operator == '<':
+            range_filters[field]['max'] = value
+        
+        # Remove from text query
+        text_query = text_query.replace(match.group(0), '').strip()
+    
+    # Pattern 3: field:min-max
+    pattern3 = r'(\w+):([\d.]+)-([\d.]+)'
+    matches = re.finditer(pattern3, query)
+    for match in matches:
+        field = match.group(1)
+        min_val = float(match.group(2))
+        max_val = float(match.group(3))
+        
+        if field not in range_filters:
+            range_filters[field] = {}
+        range_filters[field]['min'] = min_val
+        range_filters[field]['max'] = max_val
+        
+        # Remove from text query
+        text_query = text_query.replace(match.group(0), '').strip()
+    
+    # Clean up extra spaces
+    text_query = ' '.join(text_query.split())
+    
+    return text_query, range_filters if range_filters else None
+
+
+def interactive_range_query(searcher):
+    """Interactive range query builder."""
+    print("\n" + "=" * 100)
+    print("RANGE QUERY BUILDER")
+    print("=" * 100)
+    print("\nSupported fields:")
+    print("  - timestamp (Unix epoch seconds)")
+    print("  - current_price (float)")
+    print("  - calculated_percentage_change (float)")
+    print("  - market_cap (float, in USD)")
+    print("  - founded (int, year)")
+    print("  - employees (int)")
+    print("  - revenue (float, in USD)")
+    print("  - ebitda (float, in USD)")
+    print("\nEnter range filters (press Enter with empty field name to execute query)")
+    
+    range_filters = {}
+    
+    while True:
+        field = input("\nField name (or 'done' to execute, 'clear' to reset): ").strip().lower()
+        
+        if field == 'done':
+            break
+        elif field == 'clear':
+            range_filters = {}
+            print("Range filters cleared.")
+            continue
+        elif not field:
+            break
+        
+        if field not in ['timestamp', 'current_price', 'calculated_percentage_change', 
+                        'market_cap', 'founded', 'employees', 'revenue', 'ebitda']:
+            print(f"Unknown field: {field}")
+            continue
+        
+        min_str = input(f"  Minimum value for {field} (or press Enter for no minimum): ").strip()
+        max_str = input(f"  Maximum value for {field} (or press Enter for no maximum): ").strip()
+        
+        range_spec = {}
+        if min_str:
+            try:
+                if field in ['timestamp', 'founded', 'employees']:
+                    range_spec['min'] = int(float(min_str))
+                else:
+                    range_spec['min'] = float(min_str)
+            except ValueError:
+                print(f"Invalid minimum value: {min_str}")
+                continue
+        
+        if max_str:
+            try:
+                if field in ['timestamp', 'founded', 'employees']:
+                    range_spec['max'] = int(float(max_str))
+                else:
+                    range_spec['max'] = float(max_str)
+            except ValueError:
+                print(f"Invalid maximum value: {max_str}")
+                continue
+        
+        if range_spec:
+            range_filters[field] = range_spec
+            print(f"  Added: {field} = {range_spec}")
+        else:
+            print(f"  Skipped: no valid range specified")
+    
+    if not range_filters:
+        print("\nNo range filters specified.")
+        return
+    
+    # Get top_k
+    top_k_str = input("\nNumber of results (default 5): ").strip()
+    top_k = 5
+    if top_k_str:
+        try:
+            top_k = int(top_k_str)
+            if top_k < 1 or top_k > 1000:
+                top_k = 5
+        except ValueError:
+            pass
+    
+    # Execute query
+    print(f"\nExecuting range query with {len(range_filters)} filter(s)...")
+    results = searcher.range_query(range_filters, top_k=top_k)
+    searcher.display_results(results)
 
 
 def print_help(index_type='tfidf'):
@@ -319,6 +517,46 @@ def print_help(index_type='tfidf'):
     print("  'etf move_up_weak price_high'")
     print("  'move_up_strong founded_2000s'")
     print("  'size_tiny move_up_strong rev_startup'")
+    
+    if index_type == 'lucene':
+        print("\n" + "=" * 100)
+        print("RANGE QUERIES (Lucene only)")
+        print("=" * 100)
+        print("\nRange Query Syntax:")
+        print("  1. range:field:min:max")
+        print("     Example: 'range:employees:1000:50000'")
+        print("  2. range:field:min (minimum only)")
+        print("     Example: 'range:employees:1000'")
+        print("  3. field>min (greater than)")
+        print("     Example: 'employees>1000'")
+        print("  4. field<max (less than)")
+        print("     Example: 'employees<50000'")
+        print("  5. field:min-max (range)")
+        print("     Example: 'employees:1000-50000'")
+        print("\nCombining Text Search with Range Queries:")
+        print("  'tech range:employees:1000:50000'")
+        print("  'nvidia employees>5000 market_cap>1000000000'")
+        print("  'OR: technology employees:1000-50000 revenue>100000000'")
+        print("\nPure Range Queries:")
+        print("  'range:employees:1000:50000'")
+        print("  'employees>1000 market_cap>1000000000'")
+        print("\nInteractive Range Query:")
+        print("  Type 'range' to use the interactive range query builder")
+        print("\nSupported Range Query Fields:")
+        print("  - timestamp (Unix epoch seconds)")
+        print("  - current_price (float)")
+        print("  - calculated_percentage_change (float)")
+        print("  - market_cap (float, in USD)")
+        print("  - founded (int, year)")
+        print("  - employees (int)")
+        print("  - revenue (float, in USD)")
+        print("  - ebitda (float, in USD)")
+        print("\nRange Query Examples:")
+        print("  'range:employees:1000:50000'  # Employees between 1000 and 50000")
+        print("  'employees>1000'              # Employees greater than 1000")
+        print("  'market_cap:1000000000-10000000000'  # Market cap between 1B and 10B")
+        print("  'tech range:employees:1000 founded>2000'  # Tech companies with employees>1000, founded after 2000")
+    
     print("=" * 100)
 
 
