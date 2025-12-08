@@ -7,6 +7,8 @@ from typing import Optional
 from pyspark.sql import SparkSession, Row
 from pyspark.sql.types import StringType, StructType, StructField
 
+# TODO: remove "|" and "{{" and "}}" from the final data
+
 class RegexPatterns:
     """Class containing all regex patterns for data extraction"""
     

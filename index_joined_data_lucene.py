@@ -542,7 +542,7 @@ class JoinedDataLuceneSearcher:
     def __init__(self, index_dir: str = "lucene/joined_company_data_index", 
                  field_weights: Optional[Dict[str, float]] = None,
                  half_life_days: float = 62.0,
-                 recency_punishment_factor: float = 5.0):
+                 recency_punishment_factor: float = 10.0):
         self.index_dir = index_dir
         self.analyzer = StandardAnalyzer()
         self.directory = None
@@ -554,13 +554,13 @@ class JoinedDataLuceneSearcher:
         self.recency_punishment_factor = recency_punishment_factor
         
         self.field_weights = {
-            'company': 1.3,  # Highest priority - company name matches are most important
-            'symbol_search': 1.3,  # Symbol matches are very important (e.g., "NVDA" for Nvidia)
+            'company': 1.3,  # Company name matches are very important
+            'symbol_search': 1.3,  # Symbol matches are very important (e.g., "AAPL" for Apple)
             'title': 1.3,  # Title matches are important
             'keyword': 1.1,  # Keywords are moderately important
             'industries': 1.2,  # Industry matches help with categorization
             'founders': 1.0,  # Founder names are useful but less critical
-            'headquarters': 0.8,  # Location is less important for search relevance
+            'head quarters': 0.8,  # Location is less important for search relevance
             'description': 0.6,  # Less useful since it can have false matches
             'first_paragraph': 0.6,  # Less useful since it can have false matches
             'price_bucket': 1.0,  # Bucketed fields are useful for filtering
@@ -570,7 +570,6 @@ class JoinedDataLuceneSearcher:
             'rev_bucket': 1.0,  # Bucketed fields are useful for filtering
             'founded_bucket': 1.0,  # Bucketed fields are useful for filtering
             'exchange_search': 0.8,  # Exchange is less important for relevance
-            'content': 1.0,  # Combined field (not used in multi-field search)
         }
         
         # Override with custom weights if provided

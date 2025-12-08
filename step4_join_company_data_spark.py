@@ -218,11 +218,6 @@ def main():
         ltd_description_count = joined_df.filter(
             no_match_condition & ends_with_ltd_condition & (F.col("description") != "") & ~contains_etf_condition
         ).count()
-        
-        if etf_text:
-            print(f"\nAdded ETF description to {etf_description_count:,} unmatched rows containing 'etf'")
-        if ltd_text:
-            print(f"Added LTD description to {ltd_description_count:,} unmatched rows ending with 'ltd'")
     else:
         joined_df = joined_df.withColumn("description", F.lit(""))
     
@@ -267,7 +262,7 @@ def main():
         print(f"  Note: Output written as partitioned files in directory: {args.out}/")
         print(f"  To merge into single file, use: cat {args.out}/part-*.csv > {args.out}.tsv")
     
-    print(f"\n✅ Saved {extracted_count:,} rows to: {args.out}")
+    print(f"\n Saved {extracted_count:,} rows to: {args.out}")
     print(f"   Total columns: {len(output_columns) + 1} (including description)")
     
     spark.stop()
